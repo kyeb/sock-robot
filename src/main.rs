@@ -1,8 +1,10 @@
 use esp_idf_svc::hal::gpio::PinDriver;
+use esp_idf_svc::hal::i2c::{I2cConfig, I2cDriver};
 use esp_idf_svc::hal::ledc::{config::TimerConfig, LedcDriver, LedcTimerDriver};
 use esp_idf_svc::hal::prelude::*;
 use esp_idf_svc::sys;
 use log::info;
+use lsm6dso::{AccelerometerOutput, GyroscopeOutput, Lsm6dso};
 use std::thread;
 use std::time::Duration;
 
@@ -55,7 +57,7 @@ fn uart_read_byte() -> Option<u8> {
             0, // UART0
             &mut byte as *mut u8 as *mut _,
             1,
-            10, // 10 tick timeout
+            1, // 1 tick timeout (~10ms at 100Hz tick rate)
         )
     };
     if read == 1 {
@@ -63,6 +65,11 @@ fn uart_read_byte() -> Option<u8> {
     } else {
         None
     }
+}
+
+/// Get milliseconds since boot
+fn millis() -> u32 {
+    unsafe { (sys::esp_timer_get_time() / 1000) as u32 }
 }
 
 fn main() {
@@ -97,12 +104,31 @@ fn main() {
     let mut dir2 = PinDriver::output(peripherals.pins.gpio19).unwrap();
 
     let max_duty = pwm1.get_max_duty();
+
+    // IMU: I2C on GPIO21 (SDA), GPIO22 (SCL)
+    let i2c = I2cDriver::new(
+        peripherals.i2c0,
+        peripherals.pins.gpio21, // SDA
+        peripherals.pins.gpio22, // SCL
+        &I2cConfig::new().baudrate(400.kHz().into()),
+    )
+    .unwrap();
+
+    let mut imu = Lsm6dso::new(i2c, 0x6B);
+    imu.check().expect("LSM6DSO not found on I2C bus");
+    imu.set_accelerometer_output(AccelerometerOutput::Rate104)
+        .unwrap();
+    imu.set_gyroscope_output(GyroscopeOutput::Rate104)
+        .unwrap();
+
     info!("sock-robot ready. Commands: M1 <-100..100>, M2 <-100..100>, STOP");
 
     let mut buf = [0u8; 128];
     let mut pos = 0usize;
+    let mut last_imu_ms = millis();
 
     loop {
+        // Handle serial commands (non-blocking)
         if let Some(byte) = uart_read_byte() {
             if byte == b'\n' || byte == b'\r' {
                 if pos > 0 {
@@ -132,8 +158,23 @@ fn main() {
                 buf[pos] = byte;
                 pos += 1;
             }
-        } else {
-            thread::sleep(Duration::from_millis(10));
         }
+
+        // Read IMU at ~50Hz (every 20ms)
+        let now = millis();
+        if now.wrapping_sub(last_imu_ms) >= 20 {
+            last_imu_ms = now;
+            if let Ok(data) = imu.read_all() {
+                // Print as JSON line — println goes to UART0 directly
+                println!(
+                    "{{\"t\":{},\"ax\":{:.3},\"ay\":{:.3},\"az\":{:.3},\"gx\":{:.3},\"gy\":{:.3},\"gz\":{:.3},\"temp\":{:.1}}}",
+                    now, data.accel_x, data.accel_y, data.accel_z,
+                    data.gyro_x, data.gyro_y, data.gyro_z, data.temp
+                );
+            }
+        }
+
+        // Small sleep to avoid busy-spinning when no UART data
+        thread::sleep(Duration::from_millis(1));
     }
 }

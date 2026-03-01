@@ -17,6 +17,7 @@ opt-level = "z"
 
 [dependencies]
 esp-idf-svc = "0.51"
+lsm6dso = "0.2"
 log = "0.4"
 
 [build-dependencies]
