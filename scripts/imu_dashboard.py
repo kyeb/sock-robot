@@ -74,6 +74,15 @@ HTML = """<!DOCTYPE html>
     </div>
     <canvas id="gyroChart"></canvas>
   </div>
+  <div class="chart-section">
+    <h2>Orientation (degrees)</h2>
+    <div class="legend">
+      <span style="color:#e63946" id="roll-val">Roll</span>
+      <span style="color:#2a9d8f" id="pitch-val">Pitch</span>
+      <span style="color:#e9c46a" id="yaw-val">Yaw</span>
+    </div>
+    <canvas id="orientChart"></canvas>
+  </div>
 </div>
 <div class="status">
   <span id="rate">connecting...</span> &middot; <span id="samples">0</span> samples
@@ -89,6 +98,7 @@ const chartOpts = {
 
 const accelChart = new SmoothieChart({...chartOpts, minValue: -20, maxValue: 20});
 const gyroChart = new SmoothieChart({...chartOpts, minValue: -2, maxValue: 2});
+const orientChart = new SmoothieChart({...chartOpts, minValue: -180, maxValue: 180});
 
 function makeSeries(color) {
   return new TimeSeries();
@@ -96,6 +106,7 @@ function makeSeries(color) {
 
 const ax = makeSeries(), ay = makeSeries(), az = makeSeries();
 const gx = makeSeries(), gy = makeSeries(), gz = makeSeries();
+const roll = makeSeries(), pitch = makeSeries(), yaw = makeSeries();
 
 accelChart.addTimeSeries(ax, {strokeStyle: '#f72585', lineWidth: 1.5});
 accelChart.addTimeSeries(ay, {strokeStyle: '#4cc9f0', lineWidth: 1.5});
@@ -105,8 +116,13 @@ gyroChart.addTimeSeries(gx, {strokeStyle: '#f77f00', lineWidth: 1.5});
 gyroChart.addTimeSeries(gy, {strokeStyle: '#06d6a0', lineWidth: 1.5});
 gyroChart.addTimeSeries(gz, {strokeStyle: '#118ab2', lineWidth: 1.5});
 
+orientChart.addTimeSeries(roll, {strokeStyle: '#e63946', lineWidth: 1.5});
+orientChart.addTimeSeries(pitch, {strokeStyle: '#2a9d8f', lineWidth: 1.5});
+orientChart.addTimeSeries(yaw, {strokeStyle: '#e9c46a', lineWidth: 1.5});
+
 accelChart.streamTo(document.getElementById('accelChart'), 100);
 gyroChart.streamTo(document.getElementById('gyroChart'), 100);
+orientChart.streamTo(document.getElementById('orientChart'), 100);
 
 let sampleCount = 0;
 let lastRateTime = performance.now();
@@ -122,6 +138,12 @@ ws.onmessage = (event) => {
 
   ax.append(now, d.ax); ay.append(now, d.ay); az.append(now, d.az);
   gx.append(now, d.gx); gy.append(now, d.gy); gz.append(now, d.gz);
+  if (d.roll !== undefined) {
+    roll.append(now, d.roll); pitch.append(now, d.pitch); yaw.append(now, d.yaw);
+    document.getElementById('roll-val').textContent = 'Roll ' + d.roll.toFixed(1) + '\u00b0';
+    document.getElementById('pitch-val').textContent = 'Pitch ' + d.pitch.toFixed(1) + '\u00b0';
+    document.getElementById('yaw-val').textContent = 'Yaw ' + d.yaw.toFixed(1) + '\u00b0';
+  }
 
   document.getElementById('ax-val').textContent = 'X ' + d.ax.toFixed(2);
   document.getElementById('ay-val').textContent = 'Y ' + d.ay.toFixed(2);

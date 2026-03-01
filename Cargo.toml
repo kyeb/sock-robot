@@ -19,6 +19,8 @@ opt-level = "z"
 esp-idf-svc = "0.51"
 lsm6dso = "0.2"
 log = "0.4"
+ahrs = "0.6"
+nalgebra = "0.31"
 
 [build-dependencies]
 embuild = "0.33"

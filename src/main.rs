@@ -1,3 +1,4 @@
+use ahrs::{Ahrs, Madgwick};
 use esp_idf_svc::hal::gpio::PinDriver;
 use esp_idf_svc::hal::i2c::{I2cConfig, I2cDriver};
 use esp_idf_svc::hal::ledc::{config::TimerConfig, LedcDriver, LedcTimerDriver};
@@ -5,6 +6,7 @@ use esp_idf_svc::hal::prelude::*;
 use esp_idf_svc::sys;
 use log::info;
 use lsm6dso::{AccelerometerOutput, GyroscopeOutput, Lsm6dso};
+use nalgebra::Vector3;
 use std::thread;
 use std::time::Duration;
 
@@ -121,6 +123,9 @@ fn main() {
     imu.set_gyroscope_output(GyroscopeOutput::Rate104)
         .unwrap();
 
+    // AHRS filter: Madgwick with 50Hz sample rate, beta=0.1
+    let mut ahrs = Madgwick::new(0.02, 0.1);
+
     info!("sock-robot ready. Commands: M1 <-100..100>, M2 <-100..100>, STOP");
 
     let mut buf = [0u8; 128];
@@ -165,11 +170,33 @@ fn main() {
         if now.wrapping_sub(last_imu_ms) >= 20 {
             last_imu_ms = now;
             if let Ok(data) = imu.read_all() {
+                // Feed accel+gyro into AHRS filter
+                let gyro = Vector3::new(
+                    data.gyro_x as f64,
+                    data.gyro_y as f64,
+                    data.gyro_z as f64,
+                );
+                let accel = Vector3::new(
+                    data.accel_x as f64,
+                    data.accel_y as f64,
+                    data.accel_z as f64,
+                );
+
+                // Compute euler angles from AHRS quaternion
+                let (roll, pitch, yaw): (f64, f64, f64) = if ahrs.update_imu(&gyro, &accel).is_ok() {
+                    let q = ahrs.quat;
+                    let (r, p, y) = q.euler_angles();
+                    (r.to_degrees(), p.to_degrees(), y.to_degrees())
+                } else {
+                    (0.0, 0.0, 0.0)
+                };
+
                 // Print as JSON line — println goes to UART0 directly
                 println!(
-                    "{{\"t\":{},\"ax\":{:.3},\"ay\":{:.3},\"az\":{:.3},\"gx\":{:.3},\"gy\":{:.3},\"gz\":{:.3},\"temp\":{:.1}}}",
+                    "{{\"t\":{},\"ax\":{:.3},\"ay\":{:.3},\"az\":{:.3},\"gx\":{:.3},\"gy\":{:.3},\"gz\":{:.3},\"temp\":{:.1},\"roll\":{:.1},\"pitch\":{:.1},\"yaw\":{:.1}}}",
                     now, data.accel_x, data.accel_y, data.accel_z,
-                    data.gyro_x, data.gyro_y, data.gyro_z, data.temp
+                    data.gyro_x, data.gyro_y, data.gyro_z, data.temp,
+                    roll, pitch, yaw
                 );
             }
         }
