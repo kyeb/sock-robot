@@ -1,0 +1,23 @@
+[package]
+name = "sock-robot"
+version = "0.1.0"
+edition = "2021"
+resolver = "2"
+
+[[bin]]
+name = "sock-robot"
+harness = false
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true
+opt-level = "z"
+
+[dependencies]
+esp-idf-svc = "0.51"
+log = "0.4"
+
+[build-dependencies]
+embuild = "0.33"
