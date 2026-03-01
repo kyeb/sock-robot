@@ -1,6 +1,5 @@
 import { useState, useCallback } from 'react'
 import { useIMUSocket } from '~/hooks/useIMUSocket'
-import { useSampleRate } from '~/hooks/useSampleRate'
 import { Chart } from '~/components/Chart'
 import { CurrentValues } from '~/components/CurrentValues'
 import { TabBar } from '~/components/TabBar'
@@ -17,8 +16,7 @@ function getTabFromURL(): ChartTab {
 }
 
 export function App() {
-  const { dataRef, latest, status, sampleCount } = useIMUSocket()
-  const hz = useSampleRate(sampleCount)
+  const { dataRef, latest, status, sampleCount, hz } = useIMUSocket()
   const [tab, setTabState] = useState<ChartTab>(getTabFromURL)
   const [timeWindow, setTimeWindow] = useState(10)
 

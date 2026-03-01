@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { IMUSample, ConnectionStatus } from '~/lib/types'
 
 const NUM_COLUMNS = 10 // t, ax, ay, az, gx, gy, gz, roll, pitch, yaw
 const MAX_POINTS = 6000 // 2 minutes at 50Hz
+const LATEST_THROTTLE_MS = 50 // update React state at ~20Hz
 
 function createEmptyBuffer(): number[][] {
   return Array.from({ length: NUM_COLUMNS }, () => [])
@@ -10,7 +11,7 @@ function createEmptyBuffer(): number[][] {
 
 function appendToBuffer(buf: number[][], sample: IMUSample) {
   const values = [
-    sample.t / 1000, // convert ms to seconds
+    sample.t / 1000,
     sample.ax, sample.ay, sample.az,
     sample.gx, sample.gy, sample.gz,
     sample.roll, sample.pitch, sample.yaw,
@@ -27,54 +28,56 @@ export function useIMUSocket() {
   const dataRef = useRef<number[][]>(createEmptyBuffer())
   const [latest, setLatest] = useState<IMUSample | null>(null)
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
-  const sampleCountRef = useRef(0)
   const [sampleCount, setSampleCount] = useState(0)
+  const [hz, setHz] = useState(0)
 
-  // Batch sample count updates at ~4Hz to avoid excessive re-renders
-  const countIntervalRef = useRef<ReturnType<typeof setInterval>>(undefined)
-
-  const connect = useCallback(() => {
-    if (typeof window === 'undefined') return
+  useEffect(() => {
+    let rawCount = 0
+    let hzPrevCount = 0
+    let hzPrevTime = performance.now()
+    let lastLatestTime = 0
 
     const ws = new WebSocket(`ws://${location.host}/ws`)
 
-    ws.onopen = () => {
-      setStatus('connected')
-    }
+    ws.onopen = () => setStatus('connected')
 
     ws.onclose = () => {
       setStatus('disconnected')
-      // Reconnect with backoff
-      setTimeout(connect, 2000)
+      // TODO: reconnect
     }
 
-    ws.onerror = () => {
-      ws.close()
-    }
+    ws.onerror = () => ws.close()
 
     ws.onmessage = (e) => {
       const d: IMUSample = JSON.parse(e.data)
       appendToBuffer(dataRef.current, d)
-      sampleCountRef.current++
-      setLatest(d)
+      rawCount++
+
+      // Throttle React state updates to ~20Hz
+      const now = performance.now()
+      if (now - lastLatestTime >= LATEST_THROTTLE_MS) {
+        lastLatestTime = now
+        setLatest(d)
+        setSampleCount(rawCount)
+      }
     }
 
-    return ws
-  }, [])
-
-  useEffect(() => {
-    const ws = connect()
-
-    // Update sample count display at 4Hz
-    countIntervalRef.current = setInterval(() => {
-      setSampleCount(sampleCountRef.current)
-    }, 250)
+    // Hz calculation at 1Hz
+    const hzInterval = setInterval(() => {
+      const now = performance.now()
+      const dt = (now - hzPrevTime) / 1000
+      if (dt >= 0.9) {
+        setHz(Math.round((rawCount - hzPrevCount) / dt))
+        hzPrevCount = rawCount
+        hzPrevTime = now
+      }
+    }, 1000)
 
     return () => {
-      ws?.close()
-      if (countIntervalRef.current) clearInterval(countIntervalRef.current)
+      ws.close()
+      clearInterval(hzInterval)
     }
-  }, [connect])
+  }, [])
 
-  return { dataRef, latest, status, sampleCount }
+  return { dataRef, latest, status, sampleCount, hz }
 }
