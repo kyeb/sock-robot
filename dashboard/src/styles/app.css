@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+@theme {
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum";
+  background: #0a0a0f;
+  color: #c0c0c0;
+  min-height: 100vh;
+}
+
+/* CRT scanline overlay */
+.scanlines::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    transparent 0px,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+  z-index: 9999;
+}
+
+/* Chart glow effect */
+.chart-glow canvas {
+  filter: drop-shadow(0 0 3px rgba(0, 255, 245, 0.12));
+}
+
+/* Connection pulse */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.pulse-indicator {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* uPlot overrides */
+.uplot {
+  font-family: var(--font-mono) !important;
+}
+
+.uplot .u-legend {
+  display: none;
+}
