@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { IMUSample, ConnectionStatus } from '~/lib/types'
 
 const NUM_COLUMNS = 10 // t, ax, ay, az, gx, gy, gz, roll, pitch, yaw
@@ -26,34 +26,50 @@ function appendToBuffer(buf: number[][], sample: IMUSample) {
 
 export function useIMUSocket() {
   const dataRef = useRef<number[][]>(createEmptyBuffer())
+  const wsRef = useRef<WebSocket | null>(null)
   const [latest, setLatest] = useState<IMUSample | null>(null)
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [sampleCount, setSampleCount] = useState(0)
   const [hz, setHz] = useState(0)
+
+  const sendCommand = useCallback((cmd: string) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(cmd)
+    }
+  }, [])
 
   useEffect(() => {
     let rawCount = 0
     let hzPrevCount = 0
     let hzPrevTime = performance.now()
     let lastLatestTime = 0
+    let wsOpen = false
 
     const ws = new WebSocket(`ws://${location.host}/ws`)
+    wsRef.current = ws
 
-    ws.onopen = () => setStatus('connected')
-
-    ws.onclose = () => {
-      setStatus('disconnected')
-      // TODO: reconnect
-    }
-
+    ws.onclose = () => setStatus('disconnected')
     ws.onerror = () => ws.close()
 
     ws.onmessage = (e) => {
-      const d: IMUSample = JSON.parse(e.data)
+      if (e.data[0] !== '{') return
+      const msg = JSON.parse(e.data)
+
+      // Bridge status messages are the source of truth
+      if ('bridge' in msg) {
+        setStatus(msg.bridge === 'connected' ? 'connected' : 'disconnected')
+        return
+      }
+
+      // IMU data — receiving data means bridge is connected
+      if (!wsOpen) {
+        wsOpen = true
+        setStatus('connected')
+      }
+      const d = msg as IMUSample
       appendToBuffer(dataRef.current, d)
       rawCount++
 
-      // Throttle React state updates to ~20Hz
       const now = performance.now()
       if (now - lastLatestTime >= LATEST_THROTTLE_MS) {
         lastLatestTime = now
@@ -63,7 +79,7 @@ export function useIMUSocket() {
     }
 
     // Hz calculation at 1Hz
-    const hzInterval = setInterval(() => {
+    const tick = setInterval(() => {
       const now = performance.now()
       const dt = (now - hzPrevTime) / 1000
       if (dt >= 0.9) {
@@ -75,9 +91,9 @@ export function useIMUSocket() {
 
     return () => {
       ws.close()
-      clearInterval(hzInterval)
+      clearInterval(tick)
     }
   }, [])
 
-  return { dataRef, latest, status, sampleCount, hz }
+  return { dataRef, latest, status, sampleCount, hz, sendCommand }
 }

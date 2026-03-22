@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import { useIMUSocket } from '~/hooks/useIMUSocket'
 import { Chart } from '~/components/Chart'
 import { CurrentValues } from '~/components/CurrentValues'
+import { PidTuner } from '~/components/PidTuner'
 import { TabBar } from '~/components/TabBar'
 import { StatusBar } from '~/components/StatusBar'
 import { TimeWindowSelector } from '~/components/TimeWindowSelector'
@@ -16,7 +17,7 @@ function getTabFromURL(): ChartTab {
 }
 
 export function App() {
-  const { dataRef, latest, status, sampleCount, hz } = useIMUSocket()
+  const { dataRef, latest, status, sampleCount, hz, sendCommand } = useIMUSocket()
   const [tab, setTabState] = useState<ChartTab>(getTabFromURL)
   const [timeWindow, setTimeWindow] = useState(10)
 
@@ -43,6 +44,9 @@ export function App() {
 
       {/* Current values - always visible */}
       <CurrentValues sample={latest} />
+
+      {/* PID tuning controls */}
+      <PidTuner sendCommand={sendCommand} connected={status === 'connected'} />
 
       {/* Tab bar */}
       <TabBar active={tab} onChange={setTab} />

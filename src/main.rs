@@ -10,29 +10,128 @@ use nalgebra::Vector3;
 use std::thread;
 use std::time::Duration;
 
+struct PidController {
+    kp: f32,
+    ki: f32,
+    kd: f32,
+    target: f32,
+    integral: f32,
+    prev_error: f32,
+    filtered_derivative: f32,
+    d_alpha: f32,
+    enabled: bool,
+    output: f32,
+    p_term: f32,
+    i_term: f32,
+    d_term: f32,
+}
+
+impl PidController {
+    fn new(kp: f32, ki: f32, kd: f32, target: f32) -> Self {
+        Self {
+            kp,
+            ki,
+            kd,
+            target,
+            integral: 0.0,
+            prev_error: 0.0,
+            filtered_derivative: 0.0,
+            d_alpha: 0.45,
+            enabled: false,
+            output: 0.0,
+            p_term: 0.0,
+            i_term: 0.0,
+            d_term: 0.0,
+        }
+    }
+
+    fn update(&mut self, pitch: f32, pitch_rate: f32, dt: f32) -> f32 {
+        if !self.enabled || dt <= 0.0 {
+            self.integral = 0.0;
+            self.prev_error = 0.0;
+            self.filtered_derivative = 0.0;
+            self.output = 0.0;
+            return 0.0;
+        }
+
+        let error = pitch - self.target;
+
+        self.integral += error * dt;
+        self.integral = self.integral.clamp(-60.0, 60.0);
+
+        self.prev_error = error;
+
+        // EMA filter on gyro pitch rate — d_alpha=1.0 means no filtering
+        self.filtered_derivative =
+            self.d_alpha * pitch_rate + (1.0 - self.d_alpha) * self.filtered_derivative;
+
+        self.p_term = self.kp * error;
+        self.i_term = self.ki * self.integral;
+        self.d_term = self.kd * self.filtered_derivative;
+        self.output = self.p_term + self.i_term + self.d_term;
+
+        if !self.output.is_finite() {
+            self.enabled = false;
+            self.reset();
+            return 0.0;
+        }
+
+        self.output = self.output.clamp(-60.0, 60.0);
+        self.output
+    }
+
+    fn reset(&mut self) {
+        self.integral = 0.0;
+        self.prev_error = 0.0;
+        self.filtered_derivative = 0.0;
+        self.output = 0.0;
+        self.p_term = 0.0;
+        self.i_term = 0.0;
+        self.d_term = 0.0;
+    }
+}
+
 fn parse_command(line: &str) -> Option<Command> {
     let line = line.trim();
     if line.eq_ignore_ascii_case("STOP") {
         return Some(Command::Stop);
     }
+    if line.eq_ignore_ascii_case("PID_ON") {
+        return Some(Command::PidOn);
+    }
+    if line.eq_ignore_ascii_case("PID_OFF") {
+        return Some(Command::PidOff);
+    }
     let parts: Vec<&str> = line.splitn(2, ' ').collect();
     if parts.len() != 2 {
         return None;
     }
-    let speed: i32 = parts[1].parse().ok()?;
-    let speed = speed.clamp(-100, 100);
+    let val: f32 = parts[1].parse().ok()?;
+    if !val.is_finite() {
+        return None;
+    }
     match parts[0].to_ascii_uppercase().as_str() {
-        "M1" => Some(Command::Motor1(speed)),
-        "M2" => Some(Command::Motor2(speed)),
+        "KP" => Some(Command::SetKp(val.clamp(0.0, 50.0))),
+        "KI" => Some(Command::SetKi(val.clamp(0.0, 20.0))),
+        "KD" => Some(Command::SetKd(val.clamp(0.0, 50.0))),
+        "TARGET" => Some(Command::SetTarget(val.clamp(-15.0, 15.0))),
+        "DALPHA" => Some(Command::SetDAlpha(val.clamp(0.01, 1.0))),
         _ => None,
     }
 }
 
 enum Command {
-    Motor1(i32),
-    Motor2(i32),
     Stop,
+    PidOn,
+    PidOff,
+    SetKp(f32),
+    SetKi(f32),
+    SetKd(f32),
+    SetTarget(f32),
+    SetDAlpha(f32),
 }
+
+const MAX_MOTOR_PCT: i32 = 60;
 
 fn set_motor(
     pwm: &mut LedcDriver<'_>,
@@ -41,6 +140,8 @@ fn set_motor(
     max_duty: u32,
     inverted: bool,
 ) {
+    // Hard safety clamp — defense in depth
+    let speed = speed.clamp(-MAX_MOTOR_PCT, MAX_MOTOR_PCT);
     let forward = if inverted { speed <= 0 } else { speed >= 0 };
     if forward {
         dir.set_low().unwrap();
@@ -49,6 +150,11 @@ fn set_motor(
     }
     let duty = (speed.unsigned_abs() as u32) * max_duty / 100;
     pwm.set_duty(duty).unwrap();
+}
+
+fn stop_motors(pwm1: &mut LedcDriver<'_>, pwm2: &mut LedcDriver<'_>) {
+    pwm1.set_duty(0).unwrap();
+    pwm2.set_duty(0).unwrap();
 }
 
 /// Read a byte from UART0 using raw ESP-IDF uart_read_bytes
@@ -126,47 +232,65 @@ fn main() {
     // AHRS filter: Madgwick with 50Hz sample rate, beta=0.1
     let mut ahrs = Madgwick::new(0.02, 0.1);
 
-    info!("sock-robot ready. Commands: M1 <-100..100>, M2 <-100..100>, STOP");
+    // PID controller: starting gains from data analysis
+    // Capped at 20% motor power for safe initial tuning
+    let mut pid = PidController::new(12.0, 0.1, 0.3, 0.5);
+
+    info!("sock-robot ready. Commands: STOP, PID_ON, PID_OFF, KP/KI/KD/TARGET <val>");
 
     let mut buf = [0u8; 128];
     let mut pos = 0usize;
+    let mut buf_overflow = false;
     let mut last_imu_ms = millis();
 
     loop {
         // Handle serial commands (non-blocking)
         if let Some(byte) = uart_read_byte() {
             if byte == b'\n' || byte == b'\r' {
-                if pos > 0 {
+                if pos > 0 && !buf_overflow {
                     if let Ok(line) = core::str::from_utf8(&buf[..pos]) {
                         match parse_command(line) {
-                            Some(Command::Motor1(speed)) => {
-                                set_motor(&mut pwm1, &mut dir1, speed, max_duty, false);
-                                info!("M1: {speed}");
-                            }
-                            Some(Command::Motor2(speed)) => {
-                                set_motor(&mut pwm2, &mut dir2, speed, max_duty, true);
-                                info!("M2: {speed}");
-                            }
                             Some(Command::Stop) => {
-                                pwm1.set_duty(0).unwrap();
-                                pwm2.set_duty(0).unwrap();
+                                pid.enabled = false;
+                                pid.reset();
+                                stop_motors(&mut pwm1, &mut pwm2);
                                 info!("STOP");
                             }
+                            Some(Command::PidOn) => {
+                                pid.reset();
+                                pid.enabled = true;
+                                info!("PID ON: Kp={:.2} Ki={:.2} Kd={:.2} target={:.1}", pid.kp, pid.ki, pid.kd, pid.target);
+                            }
+                            Some(Command::PidOff) => {
+                                pid.enabled = false;
+                                pid.reset();
+                                stop_motors(&mut pwm1, &mut pwm2);
+                                info!("PID OFF");
+                            }
+                            Some(Command::SetKp(v)) => { pid.kp = v; info!("KP={:.2}", v); }
+                            Some(Command::SetKi(v)) => { pid.ki = v; pid.integral = 0.0; info!("KI={:.2}", v); }
+                            Some(Command::SetKd(v)) => { pid.kd = v; info!("KD={:.2}", v); }
+                            Some(Command::SetTarget(v)) => { pid.target = v; info!("TARGET={:.1}", v); }
+                            Some(Command::SetDAlpha(v)) => { pid.d_alpha = v; info!("DALPHA={:.2}", v); }
                             None => {
                                 info!("ERR: unknown: {line}");
                             }
                         }
                     }
-                    pos = 0;
                 }
+                pos = 0;
+                buf_overflow = false;
             } else if pos < buf.len() - 1 {
                 buf[pos] = byte;
                 pos += 1;
+            } else {
+                buf_overflow = true;
             }
         }
 
-        // Read IMU at ~50Hz (every 20ms)
         let now = millis();
+
+        // Read IMU at ~50Hz (every 20ms)
         if now.wrapping_sub(last_imu_ms) >= 20 {
             last_imu_ms = now;
             if let Ok(data) = imu.read_all() {
@@ -188,15 +312,47 @@ fn main() {
                     let (r, p, y) = q.euler_angles();
                     (r.to_degrees(), p.to_degrees(), y.to_degrees())
                 } else {
-                    (0.0, 0.0, 0.0)
+                    // AHRS failed — skip PID, don't feed fake data
+                    if pid.enabled {
+                        stop_motors(&mut pwm1, &mut pwm2);
+                    }
+                    println!(
+                        "{{\"t\":{},\"ax\":{:.3},\"ay\":{:.3},\"az\":{:.3},\"gx\":{:.3},\"gy\":{:.3},\"gz\":{:.3},\"temp\":{:.1},\"roll\":0,\"pitch\":0,\"yaw\":0,\"pid\":0,\"pid_on\":{}}}",
+                        now, data.accel_x, data.accel_y, data.accel_z,
+                        data.gyro_x, data.gyro_y, data.gyro_z, data.temp,
+                        pid.enabled
+                    );
+                    continue;
                 };
+
+                // Safety: skip PID if pitch is non-finite or robot has fallen over
+                let pitch_f32 = pitch as f32;
+                if !pitch_f32.is_finite() || pitch_f32.abs() > 30.0 {
+                    if pid.enabled {
+                        pid.enabled = false;
+                        pid.reset();
+                        stop_motors(&mut pwm1, &mut pwm2);
+                        info!("SAFETY: PID disabled (tilt={:.1}°)", pitch_f32);
+                    }
+                }
+
+                // Run PID controller
+                // gyro Y = pitch rate in rad/s, convert to deg/s for PID
+                let pitch_rate = data.gyro_y.to_degrees() as f32;
+                let motor_output = pid.update(pitch as f32, pitch_rate, 0.02);
+                if pid.enabled {
+                    let speed = motor_output as i32;
+                    set_motor(&mut pwm1, &mut dir1, speed, max_duty, false);
+                    set_motor(&mut pwm2, &mut dir2, speed, max_duty, true);
+                }
 
                 // Print as JSON line — println goes to UART0 directly
                 println!(
-                    "{{\"t\":{},\"ax\":{:.3},\"ay\":{:.3},\"az\":{:.3},\"gx\":{:.3},\"gy\":{:.3},\"gz\":{:.3},\"temp\":{:.1},\"roll\":{:.1},\"pitch\":{:.1},\"yaw\":{:.1}}}",
+                    "{{\"t\":{},\"ax\":{:.3},\"ay\":{:.3},\"az\":{:.3},\"gx\":{:.3},\"gy\":{:.3},\"gz\":{:.3},\"temp\":{:.1},\"roll\":{:.1},\"pitch\":{:.1},\"yaw\":{:.1},\"pid\":{:.1},\"p\":{:.1},\"i\":{:.2},\"d\":{:.1},\"pid_on\":{}}}",
                     now, data.accel_x, data.accel_y, data.accel_z,
                     data.gyro_x, data.gyro_y, data.gyro_z, data.temp,
-                    roll, pitch, yaw
+                    roll, pitch, yaw,
+                    pid.output, pid.p_term, pid.i_term, pid.d_term, pid.enabled
                 );
             }
         }
