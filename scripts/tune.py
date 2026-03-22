@@ -14,6 +14,8 @@ import json
 import math
 import sys
 import time
+from datetime import datetime
+from pathlib import Path
 
 
 WS_URL = "ws://localhost:8080/ws"
@@ -191,6 +193,19 @@ def main():
     stats = analyze(samples, target)
     parts = [f"{k}={v}" for k, v in stats.items()]
     print(f"  → {' | '.join(parts)}")
+
+    # Always save trial data
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = Path(__file__).parent.parent / "data" / "trials"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"trial_{ts}_kp{kp}_ki{ki}_kd{kd}.jsonl"
+    meta = {"trial": True, "kp": kp, "ki": ki, "kd": kd, "target": target,
+            "seconds": seconds, "n_samples": len(samples), **stats}
+    with open(out_path, "w") as f:
+        f.write(json.dumps(meta) + "\n")
+        for s in samples:
+            f.write(json.dumps(s) + "\n")
+    print(f"  → saved {out_path.name}")
 
 
 if __name__ == "__main__":
