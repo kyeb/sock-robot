@@ -49,6 +49,9 @@ impl PidController {
 
         let error = pitch - self.target;
 
+        // NOTE: leaky integrator (decay per step) was tested and made things worse —
+        // the I term must hold a constant nonzero value to compensate for CoG offset.
+        // Next step: replace I term with cascaded PID using wheel encoders.
         self.integral += error * dt;
         self.integral = self.integral.clamp(-5.0, 5.0);
 
@@ -233,6 +236,7 @@ fn main() {
     info!("Gyro bias: Y={:.4} Z={:.4} rad/s", gyro_bias_y, gyro_bias_z);
 
     // Complementary filter state
+    // Sign negated to match pitch convention: positive = leaning forward
     let accel_angle = |ax: f32, az: f32| -> f32 {
         -((ax as f64).atan2(az as f64).to_degrees() as f32)
     };
@@ -241,7 +245,8 @@ fn main() {
     let mut angle: f32 = accel_angle(init_data.accel_x, init_data.accel_z);
     let comp_alpha: f32 = 0.98;
 
-    // PID controller
+    // PID controller — gains tuned empirically (see tune.py / analyze_trials.py)
+    // Kd > 0.6 causes vibration (D amplifies gyro noise), Ki < 30 is too sluggish
     let mut pid = PidController::new(15.0, 40.0, 0.55, 0.0);
 
     info!("sock-robot ready. Commands: STOP, PID_ON, PID_OFF, KP/KI/KD/TARGET <val>");
@@ -321,8 +326,10 @@ fn main() {
                     }
                 }
 
-                // Run PID controller (D term uses gyro rate directly)
+                // D term uses gyro rate directly (not differentiated pitch) to avoid noise
                 let motor_output = pid.update(pitch, gyro_rate, dt);
+                // Yaw rate tracked for telemetry; not used for correction
+                // (differential motor speed was tested and fights balance controller)
                 let yaw_rate = (data.gyro_z - gyro_bias_z).to_degrees();
                 if pid.enabled {
                     let speed = motor_output as i32;
