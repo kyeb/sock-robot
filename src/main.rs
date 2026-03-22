@@ -50,7 +50,7 @@ impl PidController {
         let error = pitch - self.target;
 
         self.integral += error * dt;
-        self.integral = self.integral.clamp(-30.0, 30.0);
+        self.integral = self.integral.clamp(-5.0, 5.0);
 
         self.prev_error = error;
 
@@ -219,15 +219,18 @@ fn main() {
     // Calibrate gyro bias at startup (robot must be stationary)
     info!("Calibrating gyro...");
     let mut gyro_bias_y: f32 = 0.0;
+    let mut gyro_bias_z: f32 = 0.0;
     let cal_samples = 200;
     for _ in 0..cal_samples {
         thread::sleep(Duration::from_millis(5));
         if let Ok(data) = imu.read_all() {
             gyro_bias_y += data.gyro_y;
+            gyro_bias_z += data.gyro_z;
         }
     }
     gyro_bias_y /= cal_samples as f32;
-    info!("Gyro Y bias: {:.4} rad/s", gyro_bias_y);
+    gyro_bias_z /= cal_samples as f32;
+    info!("Gyro bias: Y={:.4} Z={:.4} rad/s", gyro_bias_y, gyro_bias_z);
 
     // Complementary filter state
     let accel_angle = |ax: f32, az: f32| -> f32 {
@@ -239,7 +242,7 @@ fn main() {
     let comp_alpha: f32 = 0.98;
 
     // PID controller
-    let mut pid = PidController::new(15.0, 40.0, 0.5, 0.0);
+    let mut pid = PidController::new(15.0, 40.0, 0.55, 0.0);
 
     info!("sock-robot ready. Commands: STOP, PID_ON, PID_OFF, KP/KI/KD/TARGET <val>");
 
@@ -320,6 +323,7 @@ fn main() {
 
                 // Run PID controller (D term uses gyro rate directly)
                 let motor_output = pid.update(pitch, gyro_rate, dt);
+                let yaw_rate = (data.gyro_z - gyro_bias_z).to_degrees();
                 if pid.enabled {
                     let speed = motor_output as i32;
                     set_motor(&mut pwm1, &mut dir1, speed, max_duty, false);
@@ -331,10 +335,10 @@ fn main() {
                     last_print_ms = now;
                     let accel_pitch = accel_angle(data.accel_x, data.accel_z);
                     println!(
-                        "{{\"t\":{},\"ax\":{:.3},\"ay\":{:.3},\"az\":{:.3},\"gx\":{:.3},\"gy\":{:.3},\"gz\":{:.3},\"temp\":{:.1},\"roll\":{:.1},\"pitch\":{:.1},\"ap\":{:.1},\"yaw\":0,\"pid\":{:.1},\"p\":{:.1},\"i\":{:.2},\"d\":{:.1},\"pid_on\":{}}}",
+                        "{{\"t\":{},\"ax\":{:.3},\"ay\":{:.3},\"az\":{:.3},\"gx\":{:.3},\"gy\":{:.3},\"gz\":{:.3},\"temp\":{:.1},\"roll\":{:.1},\"pitch\":{:.1},\"ap\":{:.1},\"yr\":{:.1},\"pid\":{:.1},\"p\":{:.1},\"i\":{:.2},\"d\":{:.1},\"pid_on\":{}}}",
                         now, data.accel_x, data.accel_y, data.accel_z,
                         data.gyro_x, data.gyro_y, data.gyro_z, data.temp,
-                        roll, pitch, accel_pitch,
+                        roll, pitch, accel_pitch, yaw_rate,
                         pid.output, pid.p_term, pid.i_term, pid.d_term, pid.enabled
                     );
                 }
