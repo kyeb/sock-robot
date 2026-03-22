@@ -1,12 +1,10 @@
-use ahrs::{Ahrs, Madgwick};
 use esp_idf_svc::hal::gpio::PinDriver;
 use esp_idf_svc::hal::i2c::{I2cConfig, I2cDriver};
 use esp_idf_svc::hal::ledc::{config::TimerConfig, LedcDriver, LedcTimerDriver};
 use esp_idf_svc::hal::prelude::*;
 use esp_idf_svc::sys;
 use log::info;
-use lsm6dso::{AccelerometerOutput, GyroscopeOutput, Lsm6dso};
-use nalgebra::Vector3;
+use lsm6dso::{AccelerometerOutput, GyroscopeFullScale, GyroscopeOutput, Lsm6dso};
 use std::thread;
 use std::time::Duration;
 
@@ -17,8 +15,6 @@ struct PidController {
     target: f32,
     integral: f32,
     prev_error: f32,
-    filtered_derivative: f32,
-    d_alpha: f32,
     enabled: bool,
     output: f32,
     p_term: f32,
@@ -35,8 +31,6 @@ impl PidController {
             target,
             integral: 0.0,
             prev_error: 0.0,
-            filtered_derivative: 0.0,
-            d_alpha: 0.45,
             enabled: false,
             output: 0.0,
             p_term: 0.0,
@@ -49,7 +43,6 @@ impl PidController {
         if !self.enabled || dt <= 0.0 {
             self.integral = 0.0;
             self.prev_error = 0.0;
-            self.filtered_derivative = 0.0;
             self.output = 0.0;
             return 0.0;
         }
@@ -57,17 +50,13 @@ impl PidController {
         let error = pitch - self.target;
 
         self.integral += error * dt;
-        self.integral = self.integral.clamp(-60.0, 60.0);
+        self.integral = self.integral.clamp(-30.0, 30.0);
 
         self.prev_error = error;
 
-        // EMA filter on gyro pitch rate — d_alpha=1.0 means no filtering
-        self.filtered_derivative =
-            self.d_alpha * pitch_rate + (1.0 - self.d_alpha) * self.filtered_derivative;
-
         self.p_term = self.kp * error;
         self.i_term = self.ki * self.integral;
-        self.d_term = self.kd * self.filtered_derivative;
+        self.d_term = self.kd * pitch_rate;
         self.output = self.p_term + self.i_term + self.d_term;
 
         if !self.output.is_finite() {
@@ -83,7 +72,6 @@ impl PidController {
     fn reset(&mut self) {
         self.integral = 0.0;
         self.prev_error = 0.0;
-        self.filtered_derivative = 0.0;
         self.output = 0.0;
         self.p_term = 0.0;
         self.i_term = 0.0;
@@ -112,10 +100,9 @@ fn parse_command(line: &str) -> Option<Command> {
     }
     match parts[0].to_ascii_uppercase().as_str() {
         "KP" => Some(Command::SetKp(val.clamp(0.0, 50.0))),
-        "KI" => Some(Command::SetKi(val.clamp(0.0, 20.0))),
+        "KI" => Some(Command::SetKi(val.clamp(0.0, 200.0))),
         "KD" => Some(Command::SetKd(val.clamp(0.0, 50.0))),
         "TARGET" => Some(Command::SetTarget(val.clamp(-15.0, 15.0))),
-        "DALPHA" => Some(Command::SetDAlpha(val.clamp(0.01, 1.0))),
         _ => None,
     }
 }
@@ -128,7 +115,6 @@ enum Command {
     SetKi(f32),
     SetKd(f32),
     SetTarget(f32),
-    SetDAlpha(f32),
 }
 
 const MAX_MOTOR_PCT: i32 = 60;
@@ -140,7 +126,6 @@ fn set_motor(
     max_duty: u32,
     inverted: bool,
 ) {
-    // Hard safety clamp — defense in depth
     let speed = speed.clamp(-MAX_MOTOR_PCT, MAX_MOTOR_PCT);
     let forward = if inverted { speed <= 0 } else { speed >= 0 };
     if forward {
@@ -224,17 +209,37 @@ fn main() {
 
     let mut imu = Lsm6dso::new(i2c, 0x6B);
     imu.check().expect("LSM6DSO not found on I2C bus");
-    imu.set_accelerometer_output(AccelerometerOutput::Rate104)
+    imu.set_accelerometer_output(AccelerometerOutput::Rate416)
         .unwrap();
-    imu.set_gyroscope_output(GyroscopeOutput::Rate104)
+    imu.set_gyroscope_output(GyroscopeOutput::Rate416)
+        .unwrap();
+    imu.set_gyroscope_scale(GyroscopeFullScale::Dps500)
         .unwrap();
 
-    // AHRS filter: Madgwick with 50Hz sample rate, beta=0.1
-    let mut ahrs = Madgwick::new(0.02, 0.1);
+    // Calibrate gyro bias at startup (robot must be stationary)
+    info!("Calibrating gyro...");
+    let mut gyro_bias_y: f32 = 0.0;
+    let cal_samples = 200;
+    for _ in 0..cal_samples {
+        thread::sleep(Duration::from_millis(5));
+        if let Ok(data) = imu.read_all() {
+            gyro_bias_y += data.gyro_y;
+        }
+    }
+    gyro_bias_y /= cal_samples as f32;
+    info!("Gyro Y bias: {:.4} rad/s", gyro_bias_y);
 
-    // PID controller: starting gains from data analysis
-    // Capped at 20% motor power for safe initial tuning
-    let mut pid = PidController::new(12.0, 0.1, 0.3, 0.5);
+    // Complementary filter state
+    let accel_angle = |ax: f32, az: f32| -> f32 {
+        -((ax as f64).atan2(az as f64).to_degrees() as f32)
+    };
+    // Initialize angle from accelerometer
+    let init_data = imu.read_all().unwrap();
+    let mut angle: f32 = accel_angle(init_data.accel_x, init_data.accel_z);
+    let comp_alpha: f32 = 0.98;
+
+    // PID controller
+    let mut pid = PidController::new(15.0, 40.0, 0.5, 0.0);
 
     info!("sock-robot ready. Commands: STOP, PID_ON, PID_OFF, KP/KI/KD/TARGET <val>");
 
@@ -242,6 +247,7 @@ fn main() {
     let mut pos = 0usize;
     let mut buf_overflow = false;
     let mut last_imu_ms = millis();
+    let mut last_print_ms = millis();
 
     loop {
         // Handle serial commands (non-blocking)
@@ -271,7 +277,6 @@ fn main() {
                             Some(Command::SetKi(v)) => { pid.ki = v; pid.integral = 0.0; info!("KI={:.2}", v); }
                             Some(Command::SetKd(v)) => { pid.kd = v; info!("KD={:.2}", v); }
                             Some(Command::SetTarget(v)) => { pid.target = v; info!("TARGET={:.1}", v); }
-                            Some(Command::SetDAlpha(v)) => { pid.d_alpha = v; info!("DALPHA={:.2}", v); }
                             None => {
                                 info!("ERR: unknown: {line}");
                             }
@@ -290,74 +295,53 @@ fn main() {
 
         let now = millis();
 
-        // Read IMU at ~50Hz (every 20ms)
-        if now.wrapping_sub(last_imu_ms) >= 20 {
+        // Read IMU at ~200Hz (every 5ms)
+        if now.wrapping_sub(last_imu_ms) >= 5 {
+            let dt = now.wrapping_sub(last_imu_ms) as f32 / 1000.0;
             last_imu_ms = now;
             if let Ok(data) = imu.read_all() {
-                // Feed accel+gyro into AHRS filter
-                let gyro = Vector3::new(
-                    data.gyro_x as f64,
-                    data.gyro_y as f64,
-                    data.gyro_z as f64,
-                );
-                let accel = Vector3::new(
-                    data.accel_x as f64,
-                    data.accel_y as f64,
-                    data.accel_z as f64,
-                );
+                // Complementary filter: fast gyro integration + slow accel correction
+                let gyro_rate = (data.gyro_y - gyro_bias_y).to_degrees();
+                let accel_ang = accel_angle(data.accel_x, data.accel_z);
+                angle = comp_alpha * (angle + gyro_rate * dt) + (1.0 - comp_alpha) * accel_ang;
 
-                // Compute euler angles from AHRS quaternion
-                let (roll, pitch, yaw): (f64, f64, f64) = if ahrs.update_imu(&gyro, &accel).is_ok() {
-                    let q = ahrs.quat;
-                    let (r, p, y) = q.euler_angles();
-                    (r.to_degrees(), p.to_degrees(), y.to_degrees())
-                } else {
-                    // AHRS failed — skip PID, don't feed fake data
-                    if pid.enabled {
-                        stop_motors(&mut pwm1, &mut pwm2);
-                    }
-                    println!(
-                        "{{\"t\":{},\"ax\":{:.3},\"ay\":{:.3},\"az\":{:.3},\"gx\":{:.3},\"gy\":{:.3},\"gz\":{:.3},\"temp\":{:.1},\"roll\":0,\"pitch\":0,\"yaw\":0,\"pid\":0,\"pid_on\":{}}}",
-                        now, data.accel_x, data.accel_y, data.accel_z,
-                        data.gyro_x, data.gyro_y, data.gyro_z, data.temp,
-                        pid.enabled
-                    );
-                    continue;
-                };
+                let pitch = angle;
+                let roll = accel_angle(data.accel_y, data.accel_z);
 
-                // Safety: skip PID if pitch is non-finite or robot has fallen over
-                let pitch_f32 = pitch as f32;
-                if !pitch_f32.is_finite() || pitch_f32.abs() > 30.0 {
+                // Safety: disable PID if robot has fallen over
+                if !pitch.is_finite() || pitch.abs() > 30.0 {
                     if pid.enabled {
                         pid.enabled = false;
                         pid.reset();
                         stop_motors(&mut pwm1, &mut pwm2);
-                        info!("SAFETY: PID disabled (tilt={:.1}°)", pitch_f32);
+                        info!("SAFETY: PID disabled (tilt={:.1}°)", pitch);
                     }
                 }
 
-                // Run PID controller
-                // gyro Y = pitch rate in rad/s, convert to deg/s for PID
-                let pitch_rate = data.gyro_y.to_degrees() as f32;
-                let motor_output = pid.update(pitch as f32, pitch_rate, 0.02);
+                // Run PID controller (D term uses gyro rate directly)
+                let motor_output = pid.update(pitch, gyro_rate, dt);
                 if pid.enabled {
                     let speed = motor_output as i32;
                     set_motor(&mut pwm1, &mut dir1, speed, max_duty, false);
                     set_motor(&mut pwm2, &mut dir2, speed, max_duty, true);
                 }
 
-                // Print as JSON line — println goes to UART0 directly
-                println!(
-                    "{{\"t\":{},\"ax\":{:.3},\"ay\":{:.3},\"az\":{:.3},\"gx\":{:.3},\"gy\":{:.3},\"gz\":{:.3},\"temp\":{:.1},\"roll\":{:.1},\"pitch\":{:.1},\"yaw\":{:.1},\"pid\":{:.1},\"p\":{:.1},\"i\":{:.2},\"d\":{:.1},\"pid_on\":{}}}",
-                    now, data.accel_x, data.accel_y, data.accel_z,
-                    data.gyro_x, data.gyro_y, data.gyro_z, data.temp,
-                    roll, pitch, yaw,
-                    pid.output, pid.p_term, pid.i_term, pid.d_term, pid.enabled
-                );
+                // Print as JSON line at ~50Hz (every 20ms) to avoid saturating UART
+                if now.wrapping_sub(last_print_ms) >= 20 {
+                    last_print_ms = now;
+                    let accel_pitch = accel_angle(data.accel_x, data.accel_z);
+                    println!(
+                        "{{\"t\":{},\"ax\":{:.3},\"ay\":{:.3},\"az\":{:.3},\"gx\":{:.3},\"gy\":{:.3},\"gz\":{:.3},\"temp\":{:.1},\"roll\":{:.1},\"pitch\":{:.1},\"ap\":{:.1},\"yaw\":0,\"pid\":{:.1},\"p\":{:.1},\"i\":{:.2},\"d\":{:.1},\"pid_on\":{}}}",
+                        now, data.accel_x, data.accel_y, data.accel_z,
+                        data.gyro_x, data.gyro_y, data.gyro_z, data.temp,
+                        roll, pitch, accel_pitch,
+                        pid.output, pid.p_term, pid.i_term, pid.d_term, pid.enabled
+                    );
+                }
             }
         }
 
-        // Small sleep to avoid busy-spinning when no UART data
-        thread::sleep(Duration::from_millis(1));
+        // Small sleep to yield CPU — short enough for 200Hz loop
+        thread::sleep(Duration::from_micros(500));
     }
 }

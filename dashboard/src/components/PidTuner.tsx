@@ -42,10 +42,10 @@ function ParamRow({ label, value, step, min, max, precision, onChange, disabled 
 }
 
 export function PidTuner({ sendCommand, connected }: PidTunerProps) {
-  const [kp, setKp] = useState(12.0)
+  const [kp, setKp] = useState(7.0)
   const [ki, setKi] = useState(0.1)
-  const [kd, setKd] = useState(0.3)
-  const [target, setTarget] = useState(0.5)
+  const [kd, setKd] = useState(0.45)
+  const [target, setTarget] = useState(0.4)
   const [enabled, setEnabled] = useState(false)
   const [capturing, setCapturing] = useState(false)
 
