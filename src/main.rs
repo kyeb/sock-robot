@@ -1,12 +1,104 @@
-use esp_idf_svc::hal::gpio::PinDriver;
+use esp_idf_svc::hal::gpio::{AnyInputPin, InputPin, PinDriver};
 use esp_idf_svc::hal::i2c::{I2cConfig, I2cDriver};
 use esp_idf_svc::hal::ledc::{config::TimerConfig, LedcDriver, LedcTimerDriver};
+use esp_idf_svc::hal::pcnt::*;
+use esp_idf_svc::hal::peripheral::Peripheral;
 use esp_idf_svc::hal::prelude::*;
 use esp_idf_svc::sys;
 use log::info;
 use lsm6dso::{AccelerometerOutput, GyroscopeFullScale, GyroscopeOutput, Lsm6dso};
+use std::cmp::min;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+
+struct Encoder<'d> {
+    unit: PcntDriver<'d>,
+    accum: Arc<AtomicI32>,
+}
+
+const PCNT_HIGH_LIMIT: i16 = 100;
+const PCNT_LOW_LIMIT: i16 = -100;
+// 64 CPR encoder × 50:1 gearbox × 4 edges (quadrature) = 12,800 counts/rev
+const COUNTS_PER_REV: f32 = 12_800.0;
+
+impl<'d> Encoder<'d> {
+    fn new<PCNT: Pcnt>(
+        pcnt: impl Peripheral<P = PCNT> + 'd,
+        pin_a: impl Peripheral<P = impl InputPin> + 'd,
+        pin_b: impl Peripheral<P = impl InputPin> + 'd,
+    ) -> Self {
+        let mut unit = PcntDriver::new(
+            pcnt,
+            Some(pin_a),
+            Some(pin_b),
+            Option::<AnyInputPin>::None,
+            Option::<AnyInputPin>::None,
+        )
+        .unwrap();
+
+        unit.channel_config(
+            PcntChannel::Channel0,
+            PinIndex::Pin0,
+            PinIndex::Pin1,
+            &PcntChannelConfig {
+                lctrl_mode: PcntControlMode::Reverse,
+                hctrl_mode: PcntControlMode::Keep,
+                pos_mode: PcntCountMode::Decrement,
+                neg_mode: PcntCountMode::Increment,
+                counter_h_lim: PCNT_HIGH_LIMIT,
+                counter_l_lim: PCNT_LOW_LIMIT,
+            },
+        )
+        .unwrap();
+
+        unit.channel_config(
+            PcntChannel::Channel1,
+            PinIndex::Pin1,
+            PinIndex::Pin0,
+            &PcntChannelConfig {
+                lctrl_mode: PcntControlMode::Reverse,
+                hctrl_mode: PcntControlMode::Keep,
+                pos_mode: PcntCountMode::Increment,
+                neg_mode: PcntCountMode::Decrement,
+                counter_h_lim: PCNT_HIGH_LIMIT,
+                counter_l_lim: PCNT_LOW_LIMIT,
+            },
+        )
+        .unwrap();
+
+        // 10μs glitch filter (800 APB clock cycles at 80MHz)
+        unit.set_filter_value(min(10 * 80, 1023)).unwrap();
+        unit.filter_enable().unwrap();
+
+        let accum = Arc::new(AtomicI32::new(0));
+        unsafe {
+            let accum_clone = accum.clone();
+            unit.subscribe(move |status| {
+                let status = PcntEventType::from_repr_truncated(status);
+                if status.contains(PcntEvent::HighLimit) {
+                    accum_clone.fetch_add(PCNT_HIGH_LIMIT as i32, Ordering::SeqCst);
+                }
+                if status.contains(PcntEvent::LowLimit) {
+                    accum_clone.fetch_add(PCNT_LOW_LIMIT as i32, Ordering::SeqCst);
+                }
+            })
+            .unwrap();
+        }
+        unit.event_enable(PcntEvent::HighLimit).unwrap();
+        unit.event_enable(PcntEvent::LowLimit).unwrap();
+        unit.counter_pause().unwrap();
+        unit.counter_clear().unwrap();
+        unit.counter_resume().unwrap();
+
+        Self { unit, accum }
+    }
+
+    fn count(&self) -> i32 {
+        self.accum.load(Ordering::Relaxed) + self.unit.get_counter_value().unwrap_or(0) as i32
+    }
+}
 
 struct PidController {
     kp: f32,
@@ -201,6 +293,19 @@ fn main() {
 
     let max_duty = pwm1.get_max_duty();
 
+    // Encoders: hardware quadrature decoding via PCNT
+    // Motor 1: A=GPIO23, B=GPIO4 | Motor 2: A=GPIO25, B=GPIO26
+    let enc1 = Encoder::new(
+        peripherals.pcnt0,
+        peripherals.pins.gpio23,
+        peripherals.pins.gpio4,
+    );
+    let enc2 = Encoder::new(
+        peripherals.pcnt1,
+        peripherals.pins.gpio25,
+        peripherals.pins.gpio26,
+    );
+
     // IMU: I2C on GPIO21 (SDA), GPIO22 (SCL)
     let i2c = I2cDriver::new(
         peripherals.i2c0,
@@ -256,6 +361,10 @@ fn main() {
     let mut buf_overflow = false;
     let mut last_imu_ms = millis();
     let mut last_print_ms = millis();
+    let mut prev_enc1: i32 = enc1.count();
+    let mut prev_enc2: i32 = enc2.count();
+    let mut vel1: f32;
+    let mut vel2: f32;
 
     loop {
         // Handle serial commands (non-blocking)
@@ -307,6 +416,16 @@ fn main() {
         if now.wrapping_sub(last_imu_ms) >= 5 {
             let dt = now.wrapping_sub(last_imu_ms) as f32 / 1000.0;
             last_imu_ms = now;
+            // Read encoders and compute wheel velocity
+            let e1 = enc1.count();
+            let e2 = -enc2.count(); // negated: motor 2 is mounted opposite
+            let d1 = e1 - prev_enc1;
+            let d2 = e2 - prev_enc2;
+            prev_enc1 = e1;
+            prev_enc2 = e2;
+            vel1 = (d1 as f32 / COUNTS_PER_REV) * std::f32::consts::TAU / dt;
+            vel2 = (d2 as f32 / COUNTS_PER_REV) * std::f32::consts::TAU / dt;
+
             if let Ok(data) = imu.read_all() {
                 // Complementary filter: fast gyro integration + slow accel correction
                 let gyro_rate = (data.gyro_y - gyro_bias_y).to_degrees();
@@ -342,11 +461,12 @@ fn main() {
                     last_print_ms = now;
                     let accel_pitch = accel_angle(data.accel_x, data.accel_z);
                     println!(
-                        "{{\"t\":{},\"ax\":{:.3},\"ay\":{:.3},\"az\":{:.3},\"gx\":{:.3},\"gy\":{:.3},\"gz\":{:.3},\"temp\":{:.1},\"roll\":{:.1},\"pitch\":{:.1},\"ap\":{:.1},\"yr\":{:.1},\"pid\":{:.1},\"p\":{:.1},\"i\":{:.2},\"d\":{:.1},\"pid_on\":{}}}",
+                        "{{\"t\":{},\"ax\":{:.3},\"ay\":{:.3},\"az\":{:.3},\"gx\":{:.3},\"gy\":{:.3},\"gz\":{:.3},\"temp\":{:.1},\"roll\":{:.1},\"pitch\":{:.1},\"ap\":{:.1},\"yr\":{:.1},\"pid\":{:.1},\"p\":{:.1},\"i\":{:.2},\"d\":{:.1},\"pid_on\":{},\"e1\":{},\"e2\":{},\"v1\":{:.1},\"v2\":{:.1}}}",
                         now, data.accel_x, data.accel_y, data.accel_z,
                         data.gyro_x, data.gyro_y, data.gyro_z, data.temp,
                         roll, pitch, accel_pitch, yaw_rate,
-                        pid.output, pid.p_term, pid.i_term, pid.d_term, pid.enabled
+                        pid.output, pid.p_term, pid.i_term, pid.d_term, pid.enabled,
+                        e1, e2, vel1, vel2
                     );
                 }
             }

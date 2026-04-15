@@ -42,10 +42,10 @@ function ParamRow({ label, value, step, min, max, precision, onChange, disabled 
 }
 
 export function PidTuner({ sendCommand, connected }: PidTunerProps) {
-  const [kp, setKp] = useState(7.0)
-  const [ki, setKi] = useState(0.1)
-  const [kd, setKd] = useState(0.45)
-  const [target, setTarget] = useState(0.4)
+  const [kp, setKp] = useState(15.0)
+  const [ki, setKi] = useState(40.0)
+  const [kd, setKd] = useState(0.55)
+  const [target, setTarget] = useState(0.0)
   const [enabled, setEnabled] = useState(false)
   const [capturing, setCapturing] = useState(false)
 
@@ -125,11 +125,11 @@ export function PidTuner({ sendCommand, connected }: PidTunerProps) {
         </div>
       </div>
       <div className="flex flex-wrap gap-x-6 gap-y-1">
-        <ParamRow label="KP" value={kp} step={0.5} min={0} max={20} precision={1}
+        <ParamRow label="KP" value={kp} step={0.5} min={0} max={50} precision={1}
           disabled={!connected} onChange={(v) => updateParam('KP', v, setKp)} />
-        <ParamRow label="KI" value={ki} step={0.05} min={0} max={10} precision={2}
+        <ParamRow label="KI" value={ki} step={1} min={0} max={200} precision={1}
           disabled={!connected} onChange={(v) => updateParam('KI', v, setKi)} />
-        <ParamRow label="KD" value={kd} step={0.05} min={0} max={20} precision={2}
+        <ParamRow label="KD" value={kd} step={0.05} min={0} max={50} precision={2}
           disabled={!connected} onChange={(v) => updateParam('KD', v, setKd)} />
         <ParamRow label="TARGET" value={target} step={0.1} min={-15} max={15} precision={1}
           disabled={!connected} onChange={(v) => updateParam('TARGET', v, setTarget)} />

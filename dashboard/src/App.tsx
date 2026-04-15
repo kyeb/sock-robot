@@ -8,7 +8,7 @@ import { StatusBar } from '~/components/StatusBar'
 import { TimeWindowSelector } from '~/components/TimeWindowSelector'
 import type { ChartTab } from '~/lib/types'
 
-const VALID_TABS = new Set<string>(['all', 'accel', 'gyro', 'orientation'])
+const VALID_TABS = new Set<string>(['all', 'accel', 'gyro', 'orientation', 'encoders'])
 
 function getTabFromURL(): ChartTab {
   const params = new URLSearchParams(window.location.search)
@@ -63,12 +63,16 @@ export function App() {
           <div className="flex-1 min-h-0 relative">
             <Chart dataRef={dataRef} tab="orientation" timeWindow={timeWindow} visible />
           </div>
+          <div className="flex-1 min-h-0 relative">
+            <Chart dataRef={dataRef} tab="encoders" timeWindow={timeWindow} visible />
+          </div>
         </div>
       ) : (
         <div className="flex-1 min-h-0 relative">
           <Chart dataRef={dataRef} tab="accel" timeWindow={timeWindow} visible={tab === 'accel'} />
           <Chart dataRef={dataRef} tab="gyro" timeWindow={timeWindow} visible={tab === 'gyro'} />
           <Chart dataRef={dataRef} tab="orientation" timeWindow={timeWindow} visible={tab === 'orientation'} />
+          <Chart dataRef={dataRef} tab="encoders" timeWindow={timeWindow} visible={tab === 'encoders'} />
         </div>
       )}
 

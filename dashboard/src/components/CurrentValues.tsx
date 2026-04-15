@@ -54,6 +54,13 @@ export function CurrentValues({ sample }: CurrentValuesProps) {
         <ValueDisplay label="P" value={sample?.pitch} unit={CHART_UNITS.orientation} color={orientColors[1]} precision={1} />
         <ValueDisplay label="Y" value={sample?.yaw} unit={CHART_UNITS.orientation} color={orientColors[2]} precision={1} />
       </div>
+      {/* Encoders */}
+      <div className="flex gap-3">
+        <ValueDisplay label="E1" value={sample?.e1} unit="ct" color={CHART_COLORS.encoders?.[0] ?? '#888'} precision={0} />
+        <ValueDisplay label="E2" value={sample?.e2} unit="ct" color={CHART_COLORS.encoders?.[1] ?? '#888'} precision={0} />
+        <ValueDisplay label="V1" value={sample?.v1} unit="r/s" color={CHART_COLORS.encoders?.[0] ?? '#888'} precision={1} />
+        <ValueDisplay label="V2" value={sample?.v2} unit="r/s" color={CHART_COLORS.encoders?.[1] ?? '#888'} precision={1} />
+      </div>
       {/* Temp */}
       <div className="flex gap-3">
         <ValueDisplay label="T" value={sample?.temp} unit="°C" color="#555" precision={1} />

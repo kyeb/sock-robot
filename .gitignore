@@ -1,5 +1,6 @@
 /target
 /.embuild
 /data/*.jsonl
+/data/trials/
 /dashboard/node_modules
 /dashboard/dist

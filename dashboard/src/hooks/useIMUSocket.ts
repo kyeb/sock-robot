@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { IMUSample, ConnectionStatus } from '~/lib/types'
 
-const NUM_COLUMNS = 10 // t, ax, ay, az, gx, gy, gz, roll, pitch, yaw
+const NUM_COLUMNS = 12 // t, ax, ay, az, gx, gy, gz, roll, pitch, yaw, v1, v2
 const MAX_POINTS = 6000 // 2 minutes at 50Hz
 const LATEST_THROTTLE_MS = 50 // update React state at ~20Hz
 
@@ -15,6 +15,7 @@ function appendToBuffer(buf: number[][], sample: IMUSample) {
     sample.ax, sample.ay, sample.az,
     sample.gx, sample.gy, sample.gz,
     sample.roll, sample.pitch, sample.yaw,
+    sample.v1 ?? 0, sample.v2 ?? 0,
   ]
   for (let i = 0; i < NUM_COLUMNS; i++) {
     buf[i].push(values[i])

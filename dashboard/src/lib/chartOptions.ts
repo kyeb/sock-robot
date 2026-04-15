@@ -38,10 +38,11 @@ function makeSeries(colors: readonly string[], labels: string[]): uPlot.Series[]
   ]
 }
 
-const SERIES_CONFIG: Record<ChartTab, { labels: string[]; yRange: [number, number] }> = {
+const SERIES_CONFIG: Record<ChartTab, { labels: string[]; yRange: [number, number] | null }> = {
   accel: { labels: ['X', 'Y', 'Z'], yRange: [-20, 20] },
   gyro: { labels: ['X', 'Y', 'Z'], yRange: [-5, 5] },
   orientation: { labels: ['Roll', 'Pitch', 'Yaw'], yRange: [-180, 180] },
+  encoders: { labels: ['M1', 'M2'], yRange: null },
 }
 
 export function createChartOptions(
@@ -72,10 +73,16 @@ export function createChartOptions(
           return [dataMax - timeWindow, dataMax]
         },
       },
-      y: {
-        auto: false,
-        range: yRange as uPlot.Range.MinMax,
-      },
+      y: yRange
+        ? { auto: false, range: yRange as uPlot.Range.MinMax }
+        : {
+            auto: true,
+            range: (_u: uPlot, dataMin: number, dataMax: number): uPlot.Range.MinMax => {
+              const min = Math.min(dataMin ?? 0, -1);
+              const max = Math.max(dataMax ?? 0, 1);
+              return [min, max];
+            },
+          },
     },
     series: makeSeries(colors, labels),
   }
