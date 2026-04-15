@@ -44,4 +44,6 @@ pub enum Command {
     SetVelKi(f32),
     SetPosKp(f32),
     SetYawKp(f32),
+    SetPitchBias(f32),
+    SetVelIntLimit(f32),
 }

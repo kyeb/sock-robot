@@ -10,7 +10,7 @@ pub struct BalanceController {
     pub vel_kp: f32,
     pub vel_ki: f32,
     vel_integral: f32,
-    vel_integral_limit: f32,
+    pub vel_integral_limit: f32,
 
     // Position hold: P on wheel_pos -> target_vel offset
     pub pos_kp: f32,
@@ -19,6 +19,8 @@ pub struct BalanceController {
     // Yaw correction: P on encoder divergence -> differential effort
     pub yaw_kp: f32,
     home_yaw: f32,
+
+    pub pitch_bias: f32,
 
     // Outer loop timing
     outer_loop_counter: u32,
@@ -55,6 +57,8 @@ impl BalanceController {
 
             yaw_kp: 1.0,
             home_yaw: 0.0,
+
+            pitch_bias: 0.0,
 
             outer_loop_counter: 0,
             outer_loop_divisor: 4,
@@ -111,7 +115,7 @@ impl BalanceController {
         }
 
         // Inner loop: pitch error -> motor effort (every cycle, 200Hz)
-        let pitch_error = state.pitch - self.target_pitch;
+        let pitch_error = (state.pitch - self.pitch_bias) - self.target_pitch;
         self.inner_p = self.angle_kp * pitch_error;
         self.inner_d = self.angle_kd * state.pitch_rate;
         self.effort = (self.inner_p + self.inner_d).clamp(-100.0, 100.0);

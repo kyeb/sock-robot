@@ -4,6 +4,7 @@ use crate::types::{ImuReading, RobotState, SensorSnapshot};
 const COUNTS_PER_REV: f32 = 3_200.0;
 const COMP_ALPHA: f32 = 0.98;
 const VEL_FILTER_ALPHA: f32 = 0.8;
+const GYRO_FILTER_ALPHA: f32 = 0.85;
 
 fn accel_angle(ax: f32, az: f32) -> f32 {
     -((ax as f64).atan2(az as f64).to_degrees() as f32)
@@ -11,6 +12,7 @@ fn accel_angle(ax: f32, az: f32) -> f32 {
 
 pub struct Estimator {
     angle: f32,
+    filtered_pitch_rate: f32,
     prev_enc1: i32,
     prev_enc2: i32,
     pub filtered_vel1: f32,
@@ -23,6 +25,7 @@ impl Estimator {
     pub fn new() -> Self {
         Self {
             angle: 0.0,
+            filtered_pitch_rate: 0.0,
             prev_enc1: 0,
             prev_enc2: 0,
             filtered_vel1: 0.0,
@@ -80,9 +83,12 @@ impl Estimator {
 
         let yaw_rate = snap.imu.gyro[2].to_degrees();
 
+        self.filtered_pitch_rate = GYRO_FILTER_ALPHA * self.filtered_pitch_rate
+            + (1.0 - GYRO_FILTER_ALPHA) * gyro_rate;
+
         RobotState {
             pitch: self.angle,
-            pitch_rate: gyro_rate,
+            pitch_rate: self.filtered_pitch_rate,
             wheel_vel: (self.filtered_vel1 + self.filtered_vel2) / 2.0,
             wheel_pos: self.wheel_pos,
             yaw_pos: self.yaw_pos,

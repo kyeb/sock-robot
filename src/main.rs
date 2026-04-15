@@ -127,6 +127,8 @@ fn main() {
                             Some(Command::SetVelKi(v)) => { ctrl.vel_ki = v; ctrl.reset(); info!("VKI={:.2}", v); }
                             Some(Command::SetPosKp(v)) => { ctrl.pos_kp = v; info!("PKP={:.2}", v); }
                             Some(Command::SetYawKp(v)) => { ctrl.yaw_kp = v; info!("YKP={:.2}", v); }
+                            Some(Command::SetPitchBias(v)) => { ctrl.pitch_bias = v; info!("PBIAS={:.2}", v); }
+                            Some(Command::SetVelIntLimit(v)) => { ctrl.vel_integral_limit = v; info!("VILIM={:.2}", v); }
                             None => { info!("ERR: unknown: {line}"); }
                         }
                     }

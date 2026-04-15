@@ -43,6 +43,8 @@ pub fn parse_command(line: &str) -> Option<Command> {
         "VKI" => Some(Command::SetVelKi(val.clamp(0.0, 200.0))),
         "PKP" => Some(Command::SetPosKp(val.clamp(0.0, 10.0))),
         "YKP" => Some(Command::SetYawKp(val.clamp(0.0, 10.0))),
+        "PBIAS" => Some(Command::SetPitchBias(val.clamp(-5.0, 5.0))),
+        "VILIM" => Some(Command::SetVelIntLimit(val.clamp(0.1, 20.0))),
         _ => None,
     }
 }
