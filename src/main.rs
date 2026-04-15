@@ -1,261 +1,24 @@
-use esp_idf_svc::hal::gpio::{AnyInputPin, InputPin, PinDriver};
+mod comms;
+mod controller;
+mod encoder;
+mod estimator;
+mod imu;
+mod motors;
+mod types;
+
+use controller::BalanceController;
+use encoder::Encoder;
+use esp_idf_svc::hal::gpio::PinDriver;
 use esp_idf_svc::hal::i2c::{I2cConfig, I2cDriver};
 use esp_idf_svc::hal::ledc::{config::TimerConfig, LedcDriver, LedcTimerDriver};
-use esp_idf_svc::hal::pcnt::*;
-use esp_idf_svc::hal::peripheral::Peripheral;
 use esp_idf_svc::hal::prelude::*;
 use esp_idf_svc::sys;
 use log::info;
-use lsm6dso::{AccelerometerOutput, GyroscopeFullScale, GyroscopeOutput, Lsm6dso};
-use std::cmp::min;
-use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::Arc;
+use motors::Motors;
 use std::thread;
 use std::time::Duration;
+use types::*;
 
-struct Encoder<'d> {
-    unit: PcntDriver<'d>,
-    accum: Arc<AtomicI32>,
-}
-
-const PCNT_HIGH_LIMIT: i16 = 100;
-const PCNT_LOW_LIMIT: i16 = -100;
-// 64 CPR encoder × 50:1 gearbox × 4 edges (quadrature) = 12,800 counts/rev
-const COUNTS_PER_REV: f32 = 12_800.0;
-
-impl<'d> Encoder<'d> {
-    fn new<PCNT: Pcnt>(
-        pcnt: impl Peripheral<P = PCNT> + 'd,
-        pin_a: impl Peripheral<P = impl InputPin> + 'd,
-        pin_b: impl Peripheral<P = impl InputPin> + 'd,
-    ) -> Self {
-        let mut unit = PcntDriver::new(
-            pcnt,
-            Some(pin_a),
-            Some(pin_b),
-            Option::<AnyInputPin>::None,
-            Option::<AnyInputPin>::None,
-        )
-        .unwrap();
-
-        unit.channel_config(
-            PcntChannel::Channel0,
-            PinIndex::Pin0,
-            PinIndex::Pin1,
-            &PcntChannelConfig {
-                lctrl_mode: PcntControlMode::Reverse,
-                hctrl_mode: PcntControlMode::Keep,
-                pos_mode: PcntCountMode::Decrement,
-                neg_mode: PcntCountMode::Increment,
-                counter_h_lim: PCNT_HIGH_LIMIT,
-                counter_l_lim: PCNT_LOW_LIMIT,
-            },
-        )
-        .unwrap();
-
-        unit.channel_config(
-            PcntChannel::Channel1,
-            PinIndex::Pin1,
-            PinIndex::Pin0,
-            &PcntChannelConfig {
-                lctrl_mode: PcntControlMode::Reverse,
-                hctrl_mode: PcntControlMode::Keep,
-                pos_mode: PcntCountMode::Increment,
-                neg_mode: PcntCountMode::Decrement,
-                counter_h_lim: PCNT_HIGH_LIMIT,
-                counter_l_lim: PCNT_LOW_LIMIT,
-            },
-        )
-        .unwrap();
-
-        // 10μs glitch filter (800 APB clock cycles at 80MHz)
-        unit.set_filter_value(min(10 * 80, 1023)).unwrap();
-        unit.filter_enable().unwrap();
-
-        let accum = Arc::new(AtomicI32::new(0));
-        unsafe {
-            let accum_clone = accum.clone();
-            unit.subscribe(move |status| {
-                let status = PcntEventType::from_repr_truncated(status);
-                if status.contains(PcntEvent::HighLimit) {
-                    accum_clone.fetch_add(PCNT_HIGH_LIMIT as i32, Ordering::SeqCst);
-                }
-                if status.contains(PcntEvent::LowLimit) {
-                    accum_clone.fetch_add(PCNT_LOW_LIMIT as i32, Ordering::SeqCst);
-                }
-            })
-            .unwrap();
-        }
-        unit.event_enable(PcntEvent::HighLimit).unwrap();
-        unit.event_enable(PcntEvent::LowLimit).unwrap();
-        unit.counter_pause().unwrap();
-        unit.counter_clear().unwrap();
-        unit.counter_resume().unwrap();
-
-        Self { unit, accum }
-    }
-
-    fn count(&self) -> i32 {
-        self.accum.load(Ordering::Relaxed) + self.unit.get_counter_value().unwrap_or(0) as i32
-    }
-}
-
-struct PidController {
-    kp: f32,
-    ki: f32,
-    kd: f32,
-    target: f32,
-    integral: f32,
-    prev_error: f32,
-    enabled: bool,
-    output: f32,
-    p_term: f32,
-    i_term: f32,
-    d_term: f32,
-}
-
-impl PidController {
-    fn new(kp: f32, ki: f32, kd: f32, target: f32) -> Self {
-        Self {
-            kp,
-            ki,
-            kd,
-            target,
-            integral: 0.0,
-            prev_error: 0.0,
-            enabled: false,
-            output: 0.0,
-            p_term: 0.0,
-            i_term: 0.0,
-            d_term: 0.0,
-        }
-    }
-
-    fn update(&mut self, pitch: f32, pitch_rate: f32, dt: f32) -> f32 {
-        if !self.enabled || dt <= 0.0 {
-            self.integral = 0.0;
-            self.prev_error = 0.0;
-            self.output = 0.0;
-            return 0.0;
-        }
-
-        let error = pitch - self.target;
-
-        // NOTE: leaky integrator (decay per step) was tested and made things worse —
-        // the I term must hold a constant nonzero value to compensate for CoG offset.
-        // Next step: replace I term with cascaded PID using wheel encoders.
-        self.integral += error * dt;
-        self.integral = self.integral.clamp(-5.0, 5.0);
-
-        self.prev_error = error;
-
-        self.p_term = self.kp * error;
-        self.i_term = self.ki * self.integral;
-        self.d_term = self.kd * pitch_rate;
-        self.output = self.p_term + self.i_term + self.d_term;
-
-        if !self.output.is_finite() {
-            self.enabled = false;
-            self.reset();
-            return 0.0;
-        }
-
-        self.output = self.output.clamp(-60.0, 60.0);
-        self.output
-    }
-
-    fn reset(&mut self) {
-        self.integral = 0.0;
-        self.prev_error = 0.0;
-        self.output = 0.0;
-        self.p_term = 0.0;
-        self.i_term = 0.0;
-        self.d_term = 0.0;
-    }
-}
-
-fn parse_command(line: &str) -> Option<Command> {
-    let line = line.trim();
-    if line.eq_ignore_ascii_case("STOP") {
-        return Some(Command::Stop);
-    }
-    if line.eq_ignore_ascii_case("PID_ON") {
-        return Some(Command::PidOn);
-    }
-    if line.eq_ignore_ascii_case("PID_OFF") {
-        return Some(Command::PidOff);
-    }
-    let parts: Vec<&str> = line.splitn(2, ' ').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let val: f32 = parts[1].parse().ok()?;
-    if !val.is_finite() {
-        return None;
-    }
-    match parts[0].to_ascii_uppercase().as_str() {
-        "KP" => Some(Command::SetKp(val.clamp(0.0, 50.0))),
-        "KI" => Some(Command::SetKi(val.clamp(0.0, 200.0))),
-        "KD" => Some(Command::SetKd(val.clamp(0.0, 50.0))),
-        "TARGET" => Some(Command::SetTarget(val.clamp(-15.0, 15.0))),
-        _ => None,
-    }
-}
-
-enum Command {
-    Stop,
-    PidOn,
-    PidOff,
-    SetKp(f32),
-    SetKi(f32),
-    SetKd(f32),
-    SetTarget(f32),
-}
-
-const MAX_MOTOR_PCT: i32 = 60;
-
-fn set_motor(
-    pwm: &mut LedcDriver<'_>,
-    dir: &mut PinDriver<'_, impl esp_idf_svc::hal::gpio::OutputPin, esp_idf_svc::hal::gpio::Output>,
-    speed: i32,
-    max_duty: u32,
-    inverted: bool,
-) {
-    let speed = speed.clamp(-MAX_MOTOR_PCT, MAX_MOTOR_PCT);
-    let forward = if inverted { speed <= 0 } else { speed >= 0 };
-    if forward {
-        dir.set_low().unwrap();
-    } else {
-        dir.set_high().unwrap();
-    }
-    let duty = (speed.unsigned_abs() as u32) * max_duty / 100;
-    pwm.set_duty(duty).unwrap();
-}
-
-fn stop_motors(pwm1: &mut LedcDriver<'_>, pwm2: &mut LedcDriver<'_>) {
-    pwm1.set_duty(0).unwrap();
-    pwm2.set_duty(0).unwrap();
-}
-
-/// Read a byte from UART0 using raw ESP-IDF uart_read_bytes
-fn uart_read_byte() -> Option<u8> {
-    let mut byte = 0u8;
-    let read = unsafe {
-        sys::uart_read_bytes(
-            0, // UART0
-            &mut byte as *mut u8 as *mut _,
-            1,
-            1, // 1 tick timeout (~10ms at 100Hz tick rate)
-        )
-    };
-    if read == 1 {
-        Some(byte)
-    } else {
-        None
-    }
-}
-
-/// Get milliseconds since boot
 fn millis() -> u32 {
     unsafe { (sys::esp_timer_get_time() / 1000) as u32 }
 }
@@ -266,137 +29,102 @@ fn main() {
 
     let peripherals = Peripherals::take().unwrap();
 
-    // Install UART0 driver (needed for uart_read_bytes)
     unsafe {
         sys::uart_driver_install(0, 1024, 0, 0, std::ptr::null_mut(), 0);
     }
 
-    // Motor 1: PWM on GPIO16, DIR on GPIO17
+    // Motors
     let timer1 = LedcTimerDriver::new(
         peripherals.ledc.timer0,
         &TimerConfig::default().frequency(1.kHz().into()),
     )
     .unwrap();
-    let mut pwm1 =
-        LedcDriver::new(peripherals.ledc.channel0, &timer1, peripherals.pins.gpio16).unwrap();
-    let mut dir1 = PinDriver::output(peripherals.pins.gpio17).unwrap();
+    let pwm1 = LedcDriver::new(peripherals.ledc.channel0, &timer1, peripherals.pins.gpio16).unwrap();
+    let dir1 = PinDriver::output(peripherals.pins.gpio17).unwrap();
 
-    // Motor 2: PWM on GPIO18, DIR on GPIO19
     let timer2 = LedcTimerDriver::new(
         peripherals.ledc.timer1,
         &TimerConfig::default().frequency(1.kHz().into()),
     )
     .unwrap();
-    let mut pwm2 =
-        LedcDriver::new(peripherals.ledc.channel1, &timer2, peripherals.pins.gpio18).unwrap();
-    let mut dir2 = PinDriver::output(peripherals.pins.gpio19).unwrap();
+    let pwm2 = LedcDriver::new(peripherals.ledc.channel1, &timer2, peripherals.pins.gpio18).unwrap();
+    let dir2 = PinDriver::output(peripherals.pins.gpio19).unwrap();
 
-    let max_duty = pwm1.get_max_duty();
+    let mut motors = Motors::new(pwm1, dir1, pwm2, dir2);
 
-    // Encoders: hardware quadrature decoding via PCNT
-    // Motor 1: A=GPIO23, B=GPIO4 | Motor 2: A=GPIO25, B=GPIO26
-    let enc1 = Encoder::new(
-        peripherals.pcnt0,
-        peripherals.pins.gpio23,
-        peripherals.pins.gpio4,
-    );
-    let enc2 = Encoder::new(
-        peripherals.pcnt1,
-        peripherals.pins.gpio25,
-        peripherals.pins.gpio26,
-    );
+    // Encoders
+    let enc1 = Encoder::new(peripherals.pcnt0, peripherals.pins.gpio23, peripherals.pins.gpio4);
+    let enc2 = Encoder::new(peripherals.pcnt1, peripherals.pins.gpio25, peripherals.pins.gpio26);
 
-    // IMU: I2C on GPIO21 (SDA), GPIO22 (SCL)
+    // IMU
     let i2c = I2cDriver::new(
         peripherals.i2c0,
-        peripherals.pins.gpio21, // SDA
-        peripherals.pins.gpio22, // SCL
+        peripherals.pins.gpio21,
+        peripherals.pins.gpio22,
         &I2cConfig::new().baudrate(400.kHz().into()),
     )
     .unwrap();
 
-    let mut imu = Lsm6dso::new(i2c, 0x6B);
-    imu.check().expect("LSM6DSO not found on I2C bus");
-    imu.set_accelerometer_output(AccelerometerOutput::Rate416)
-        .unwrap();
-    imu.set_gyroscope_output(GyroscopeOutput::Rate416)
-        .unwrap();
-    imu.set_gyroscope_scale(GyroscopeFullScale::Dps500)
-        .unwrap();
+    let mut imu = imu::Imu::new(i2c, 0x6B);
+    imu.calibrate_bias(200);
 
-    // Calibrate gyro bias at startup (robot must be stationary)
-    info!("Calibrating gyro...");
-    let mut gyro_bias_y: f32 = 0.0;
-    let mut gyro_bias_z: f32 = 0.0;
-    let cal_samples = 200;
-    for _ in 0..cal_samples {
-        thread::sleep(Duration::from_millis(5));
-        if let Ok(data) = imu.read_all() {
-            gyro_bias_y += data.gyro_y;
-            gyro_bias_z += data.gyro_z;
-        }
+    // Estimator
+    let mut estimator = estimator::Estimator::new();
+    if let Some(reading) = imu.read() {
+        estimator.init_angle(&reading);
     }
-    gyro_bias_y /= cal_samples as f32;
-    gyro_bias_z /= cal_samples as f32;
-    info!("Gyro bias: Y={:.4} Z={:.4} rad/s", gyro_bias_y, gyro_bias_z);
+    estimator.init_encoders(enc1.count(), -enc2.count());
 
-    // Complementary filter state
-    // Sign negated to match pitch convention: positive = leaning forward
-    let accel_angle = |ax: f32, az: f32| -> f32 {
-        -((ax as f64).atan2(az as f64).to_degrees() as f32)
+    // Controller
+    let mut ctrl = BalanceController::new();
+    let mut reference = ControlReference {
+        target_vel: 0.0,
+        enabled: false,
     };
-    // Initialize angle from accelerometer
-    let init_data = imu.read_all().unwrap();
-    let mut angle: f32 = accel_angle(init_data.accel_x, init_data.accel_z);
-    let comp_alpha: f32 = 0.98;
 
-    // PID controller — gains tuned empirically (see tune.py / analyze_trials.py)
-    // Kd > 0.6 causes vibration (D amplifies gyro noise), Ki < 30 is too sluggish
-    let mut pid = PidController::new(15.0, 40.0, 0.55, 0.0);
-
-    info!("sock-robot ready. Commands: STOP, PID_ON, PID_OFF, KP/KI/KD/TARGET <val>");
+    info!("sock-robot ready. Commands: STOP, PID_ON, PID_OFF, KP/KD/VKP/VKI/TARGET <val>");
 
     let mut buf = [0u8; 128];
     let mut pos = 0usize;
     let mut buf_overflow = false;
     let mut last_imu_ms = millis();
     let mut last_print_ms = millis();
-    let mut prev_enc1: i32 = enc1.count();
-    let mut prev_enc2: i32 = enc2.count();
-    let mut vel1: f32;
-    let mut vel2: f32;
 
     loop {
         // Handle serial commands (non-blocking)
-        if let Some(byte) = uart_read_byte() {
+        if let Some(byte) = comms::uart_read_byte() {
             if byte == b'\n' || byte == b'\r' {
                 if pos > 0 && !buf_overflow {
                     if let Ok(line) = core::str::from_utf8(&buf[..pos]) {
-                        match parse_command(line) {
+                        match comms::parse_command(line) {
                             Some(Command::Stop) => {
-                                pid.enabled = false;
-                                pid.reset();
-                                stop_motors(&mut pwm1, &mut pwm2);
+                                ctrl.enabled = false;
+                                ctrl.reset();
+                                reference.enabled = false;
+                                motors.stop();
                                 info!("STOP");
                             }
                             Some(Command::PidOn) => {
-                                pid.reset();
-                                pid.enabled = true;
-                                info!("PID ON: Kp={:.2} Ki={:.2} Kd={:.2} target={:.1}", pid.kp, pid.ki, pid.kd, pid.target);
+                                ctrl.reset();
+                                ctrl.enabled = true;
+                                reference.enabled = true;
+                                info!("PID ON: angle_kp={:.2} angle_kd={:.2} vel_kp={:.2} vel_ki={:.2}",
+                                    ctrl.angle_kp, ctrl.angle_kd, ctrl.vel_kp, ctrl.vel_ki);
                             }
                             Some(Command::PidOff) => {
-                                pid.enabled = false;
-                                pid.reset();
-                                stop_motors(&mut pwm1, &mut pwm2);
+                                ctrl.enabled = false;
+                                ctrl.reset();
+                                reference.enabled = false;
+                                motors.stop();
                                 info!("PID OFF");
                             }
-                            Some(Command::SetKp(v)) => { pid.kp = v; info!("KP={:.2}", v); }
-                            Some(Command::SetKi(v)) => { pid.ki = v; pid.integral = 0.0; info!("KI={:.2}", v); }
-                            Some(Command::SetKd(v)) => { pid.kd = v; info!("KD={:.2}", v); }
-                            Some(Command::SetTarget(v)) => { pid.target = v; info!("TARGET={:.1}", v); }
-                            None => {
-                                info!("ERR: unknown: {line}");
-                            }
+                            Some(Command::SetKp(v)) => { ctrl.angle_kp = v; info!("KP={:.2}", v); }
+                            Some(Command::SetKi(v)) => { info!("KI ignored in cascaded mode (use VKI). val={:.2}", v); }
+                            Some(Command::SetKd(v)) => { ctrl.angle_kd = v; info!("KD={:.2}", v); }
+                            Some(Command::SetTarget(v)) => { reference.target_vel = v; info!("TARGET_VEL={:.1}", v); }
+                            Some(Command::SetVelKp(v)) => { ctrl.vel_kp = v; info!("VKP={:.2}", v); }
+                            Some(Command::SetVelKi(v)) => { ctrl.vel_ki = v; ctrl.reset(); info!("VKI={:.2}", v); }
+                            None => { info!("ERR: unknown: {line}"); }
                         }
                     }
                 }
@@ -412,67 +140,42 @@ fn main() {
 
         let now = millis();
 
-        // Read IMU at ~200Hz (every 5ms)
+        // 200Hz control loop
         if now.wrapping_sub(last_imu_ms) >= 5 {
             let dt = now.wrapping_sub(last_imu_ms) as f32 / 1000.0;
             last_imu_ms = now;
-            // Read encoders and compute wheel velocity
+
             let e1 = enc1.count();
-            let e2 = -enc2.count(); // negated: motor 2 is mounted opposite
-            let d1 = e1 - prev_enc1;
-            let d2 = e2 - prev_enc2;
-            prev_enc1 = e1;
-            prev_enc2 = e2;
-            vel1 = (d1 as f32 / COUNTS_PER_REV) * std::f32::consts::TAU / dt;
-            vel2 = (d2 as f32 / COUNTS_PER_REV) * std::f32::consts::TAU / dt;
+            let e2 = -enc2.count();
 
-            if let Ok(data) = imu.read_all() {
-                // Complementary filter: fast gyro integration + slow accel correction
-                let gyro_rate = (data.gyro_y - gyro_bias_y).to_degrees();
-                let accel_ang = accel_angle(data.accel_x, data.accel_z);
-                angle = comp_alpha * (angle + gyro_rate * dt) + (1.0 - comp_alpha) * accel_ang;
+            if let Some(reading) = imu.read() {
+                let snapshot = SensorSnapshot {
+                    t_ms: now,
+                    dt,
+                    imu: reading,
+                    enc1: e1,
+                    enc2: e2,
+                };
 
-                let pitch = angle;
-                let roll = accel_angle(data.accel_y, data.accel_z);
+                let state = estimator.update(&snapshot);
+                let cmd = ctrl.update(&state, &reference);
 
-                // Safety: disable PID if robot has fallen over
-                if !pitch.is_finite() || pitch.abs() > 30.0 {
-                    if pid.enabled {
-                        pid.enabled = false;
-                        pid.reset();
-                        stop_motors(&mut pwm1, &mut pwm2);
-                        info!("SAFETY: PID disabled (tilt={:.1}°)", pitch);
-                    }
-                }
+                // Always apply command — if controller disabled, it returns zero
+                motors.apply(cmd);
 
-                // D term uses gyro rate directly (not differentiated pitch) to avoid noise
-                let motor_output = pid.update(pitch, gyro_rate, dt);
-                // Yaw rate tracked for telemetry; not used for correction
-                // (differential motor speed was tested and fights balance controller)
-                let yaw_rate = (data.gyro_z - gyro_bias_z).to_degrees();
-                if pid.enabled {
-                    let speed = motor_output as i32;
-                    set_motor(&mut pwm1, &mut dir1, speed, max_duty, false);
-                    set_motor(&mut pwm2, &mut dir2, speed, max_duty, true);
-                }
-
-                // Print as JSON line at ~50Hz (every 20ms) to avoid saturating UART
+                // 50Hz telemetry
                 if now.wrapping_sub(last_print_ms) >= 20 {
                     last_print_ms = now;
-                    let accel_pitch = accel_angle(data.accel_x, data.accel_z);
-                    println!(
-                        "{{\"t\":{},\"ax\":{:.3},\"ay\":{:.3},\"az\":{:.3},\"gx\":{:.3},\"gy\":{:.3},\"gz\":{:.3},\"temp\":{:.1},\"roll\":{:.1},\"pitch\":{:.1},\"ap\":{:.1},\"yr\":{:.1},\"pid\":{:.1},\"p\":{:.1},\"i\":{:.2},\"d\":{:.1},\"pid_on\":{},\"e1\":{},\"e2\":{},\"v1\":{:.1},\"v2\":{:.1}}}",
-                        now, data.accel_x, data.accel_y, data.accel_z,
-                        data.gyro_x, data.gyro_y, data.gyro_z, data.temp,
-                        roll, pitch, accel_pitch, yaw_rate,
-                        pid.output, pid.p_term, pid.i_term, pid.d_term, pid.enabled,
-                        e1, e2, vel1, vel2
-                    );
+                    comms::emit_telemetry(&state, &snapshot, &ctrl, estimator.filtered_vel1, estimator.filtered_vel2);
                 }
+            } else {
+                // IMU read failure: fail safe
+                ctrl.enabled = false;
+                ctrl.reset();
+                motors.stop();
             }
         }
 
-        // Small sleep to yield CPU — short enough for 200Hz loop
         thread::sleep(Duration::from_micros(500));
     }
 }

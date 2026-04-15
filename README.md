@@ -40,13 +40,31 @@ scripts/tune.py            # Interactive tuning with live stats
 scripts/analyze_trials.py data/trials/trial_*.jsonl
 ```
 
+## Sign conventions
+
+- **Pitch:** positive = leaning forward (AX negative on IMU)
+- **Encoders:** positive = robot moves forward
+- **Motor effort:** positive = drive wheels forward (reaction torque tilts body backward)
+- **Motor 2** is mounted opposite, so enc2 is negated and motor 2 direction is inverted in firmware
+
+Mark "forward" on the robot with tape — the physical chassis is symmetrical.
+
+## Control architecture
+
+Cascaded PID: inner P+D angle loop at 200Hz, outer PI velocity loop at ~50Hz.
+
+- **Inner loop:** `effort = angle_kp * (pitch - target_pitch) + angle_kd * pitch_rate`
+- **Outer loop:** velocity error → target_pitch. If drifting forward, commands backward lean to decelerate.
+
 ## Serial commands
 
 Send over UART or via dashboard/bridge WebSocket:
 
 ```
 PID_ON / PID_OFF / STOP
-KP <val> / KI <val> / KD <val> / TARGET <val>
+KP <val> / KD <val>           # inner angle loop
+VKP <val> / VKI <val>         # outer velocity loop
+TARGET <val>                   # target velocity (rad/s)
 ```
 
-Current tuned gains: Kp=15, Ki=40, Kd=0.55, target=0.
+Current gains: angle_kp=15, angle_kd=0.35, vel_kp=0.3, vel_ki=0.6.
