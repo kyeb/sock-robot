@@ -82,7 +82,7 @@ fn main() {
         enabled: false,
     };
 
-    info!("sock-robot ready. Commands: STOP, PID_ON, PID_OFF, KP/KD/VKP/VKI/TARGET <val>");
+    info!("sock-robot ready. Commands: STOP, PID_ON, PID_OFF, KP/KD/VKP/VKI/PKP/YKP/TARGET <val>");
 
     let mut buf = [0u8; 128];
     let mut pos = 0usize;
@@ -106,10 +106,11 @@ fn main() {
                             }
                             Some(Command::PidOn) => {
                                 ctrl.reset();
+                                ctrl.set_home(estimator.wheel_pos(), estimator.yaw_pos());
                                 ctrl.enabled = true;
                                 reference.enabled = true;
-                                info!("PID ON: angle_kp={:.2} angle_kd={:.2} vel_kp={:.2} vel_ki={:.2}",
-                                    ctrl.angle_kp, ctrl.angle_kd, ctrl.vel_kp, ctrl.vel_ki);
+                                info!("PID ON: angle_kp={:.2} angle_kd={:.2} vel_kp={:.2} vel_ki={:.2} pos_kp={:.2} yaw_kp={:.2}",
+                                    ctrl.angle_kp, ctrl.angle_kd, ctrl.vel_kp, ctrl.vel_ki, ctrl.pos_kp, ctrl.yaw_kp);
                             }
                             Some(Command::PidOff) => {
                                 ctrl.enabled = false;
@@ -124,6 +125,8 @@ fn main() {
                             Some(Command::SetTarget(v)) => { reference.target_vel = v; info!("TARGET_VEL={:.1}", v); }
                             Some(Command::SetVelKp(v)) => { ctrl.vel_kp = v; info!("VKP={:.2}", v); }
                             Some(Command::SetVelKi(v)) => { ctrl.vel_ki = v; ctrl.reset(); info!("VKI={:.2}", v); }
+                            Some(Command::SetPosKp(v)) => { ctrl.pos_kp = v; info!("PKP={:.2}", v); }
+                            Some(Command::SetYawKp(v)) => { ctrl.yaw_kp = v; info!("YKP={:.2}", v); }
                             None => { info!("ERR: unknown: {line}"); }
                         }
                     }

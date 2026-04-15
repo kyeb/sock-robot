@@ -16,6 +16,8 @@ pub struct RobotState {
     pub pitch: f32,
     pub pitch_rate: f32,
     pub wheel_vel: f32,
+    pub wheel_pos: f32,
+    pub yaw_pos: f32,
     pub yaw_rate: f32,
     pub dt: f32,
 }
@@ -40,4 +42,6 @@ pub enum Command {
     SetTarget(f32),
     SetVelKp(f32),
     SetVelKi(f32),
+    SetPosKp(f32),
+    SetYawKp(f32),
 }

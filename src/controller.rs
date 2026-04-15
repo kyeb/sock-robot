@@ -12,6 +12,14 @@ pub struct BalanceController {
     vel_integral: f32,
     vel_integral_limit: f32,
 
+    // Position hold: P on wheel_pos -> target_vel offset
+    pub pos_kp: f32,
+    home_pos: f32,
+
+    // Yaw correction: P on encoder divergence -> differential effort
+    pub yaw_kp: f32,
+    home_yaw: f32,
+
     // Outer loop timing
     outer_loop_counter: u32,
     outer_loop_divisor: u32,
@@ -27,6 +35,8 @@ pub struct BalanceController {
     pub outer_p: f32,
     pub outer_i: f32,
     pub effort: f32,
+    pub pos_correction: f32,
+    pub yaw_correction: f32,
 }
 
 impl BalanceController {
@@ -36,9 +46,15 @@ impl BalanceController {
             angle_kd: 0.35,
 
             vel_kp: 0.5,
-            vel_ki: 0.4,
+            vel_ki: 0.2,
             vel_integral: 0.0,
             vel_integral_limit: 2.0,
+
+            pos_kp: 0.3,
+            home_pos: 0.0,
+
+            yaw_kp: 1.0,
+            home_yaw: 0.0,
 
             outer_loop_counter: 0,
             outer_loop_divisor: 4,
@@ -52,6 +68,8 @@ impl BalanceController {
             outer_p: 0.0,
             outer_i: 0.0,
             effort: 0.0,
+            pos_correction: 0.0,
+            yaw_correction: 0.0,
         }
     }
 
@@ -77,7 +95,13 @@ impl BalanceController {
             self.outer_loop_counter = 0;
             self.outer_dt_accum = 0.0;
 
-            let vel_error = reference.target_vel - state.wheel_vel;
+            // Position hold: position error drives a velocity correction
+            let pos_error = self.home_pos - state.wheel_pos;
+            self.pos_correction = self.pos_kp * pos_error;
+
+            // Velocity loop: error includes position correction
+            let target_vel = reference.target_vel + self.pos_correction;
+            let vel_error = target_vel - state.wheel_vel;
             self.vel_integral += vel_error * outer_dt;
             self.vel_integral = self.vel_integral.clamp(-self.vel_integral_limit, self.vel_integral_limit);
 
@@ -92,7 +116,20 @@ impl BalanceController {
         self.inner_d = self.angle_kd * state.pitch_rate;
         self.effort = (self.inner_p + self.inner_d).clamp(-100.0, 100.0);
 
-        MotorCommand { left: self.effort, right: self.effort }
+        // Yaw correction: encoder divergence drives differential effort back toward home_yaw
+        // Clamped to ±10% effort so it can't overwhelm balance
+        let yaw_error = state.yaw_pos - self.home_yaw;
+        self.yaw_correction = (self.yaw_kp * yaw_error).clamp(-10.0, 10.0);
+
+        MotorCommand {
+            left: (self.effort - self.yaw_correction).clamp(-100.0, 100.0),
+            right: (self.effort + self.yaw_correction).clamp(-100.0, 100.0),
+        }
+    }
+
+    pub fn set_home(&mut self, pos: f32, yaw: f32) {
+        self.home_pos = pos;
+        self.home_yaw = yaw;
     }
 
     pub fn reset(&mut self) {
@@ -105,5 +142,7 @@ impl BalanceController {
         self.outer_p = 0.0;
         self.outer_i = 0.0;
         self.effort = 0.0;
+        self.pos_correction = 0.0;
+        self.yaw_correction = 0.0;
     }
 }

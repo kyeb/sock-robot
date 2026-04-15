@@ -15,6 +15,8 @@ pub struct Estimator {
     prev_enc2: i32,
     pub filtered_vel1: f32,
     pub filtered_vel2: f32,
+    wheel_pos: f32,
+    yaw_pos: f32,
 }
 
 impl Estimator {
@@ -25,11 +27,21 @@ impl Estimator {
             prev_enc2: 0,
             filtered_vel1: 0.0,
             filtered_vel2: 0.0,
+            wheel_pos: 0.0,
+            yaw_pos: 0.0,
         }
     }
 
     pub fn init_angle(&mut self, reading: &ImuReading) {
         self.angle = accel_angle(reading.accel[0], reading.accel[2]);
+    }
+
+    pub fn wheel_pos(&self) -> f32 {
+        self.wheel_pos
+    }
+
+    pub fn yaw_pos(&self) -> f32 {
+        self.yaw_pos
     }
 
     pub fn init_encoders(&mut self, enc1: i32, enc2: i32) {
@@ -58,12 +70,22 @@ impl Estimator {
         self.filtered_vel1 = VEL_FILTER_ALPHA * self.filtered_vel1 + (1.0 - VEL_FILTER_ALPHA) * raw_vel1;
         self.filtered_vel2 = VEL_FILTER_ALPHA * self.filtered_vel2 + (1.0 - VEL_FILTER_ALPHA) * raw_vel2;
 
+        // Position from encoder counts directly (not integrated velocity — no lag or drift)
+        let avg_counts = (snap.enc1 + snap.enc2) as f32 / 2.0;
+        self.wheel_pos = (avg_counts / COUNTS_PER_REV) * std::f32::consts::TAU;
+
+        // Yaw from encoder divergence: (e1 - e2) in radians
+        let diff_counts = (snap.enc1 - snap.enc2) as f32;
+        self.yaw_pos = (diff_counts / COUNTS_PER_REV) * std::f32::consts::TAU;
+
         let yaw_rate = snap.imu.gyro[2].to_degrees();
 
         RobotState {
             pitch: self.angle,
             pitch_rate: gyro_rate,
             wheel_vel: (self.filtered_vel1 + self.filtered_vel2) / 2.0,
+            wheel_pos: self.wheel_pos,
+            yaw_pos: self.yaw_pos,
             yaw_rate,
             dt,
         }
