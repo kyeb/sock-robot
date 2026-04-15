@@ -35,12 +35,11 @@ impl BalanceController {
             angle_kp: 15.0,
             angle_kd: 0.35,
 
-            vel_kp: 0.3,
-            vel_ki: 0.6,
+            vel_kp: 0.5,
+            vel_ki: 0.4,
             vel_integral: 0.0,
-            vel_integral_limit: 5.0,
+            vel_integral_limit: 2.0,
 
-            // Run outer loop every 4th cycle: 200Hz / 4 = 50Hz
             outer_loop_counter: 0,
             outer_loop_divisor: 4,
             outer_dt_accum: 0.0,

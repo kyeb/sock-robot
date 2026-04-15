@@ -67,4 +67,4 @@ VKP <val> / VKI <val>         # outer velocity loop
 TARGET <val>                   # target velocity (rad/s)
 ```
 
-Current gains: angle_kp=15, angle_kd=0.35, vel_kp=0.3, vel_ki=0.6.
+Current gains: angle_kp=15, angle_kd=0.35, vel_kp=0.5, vel_ki=0.4.
