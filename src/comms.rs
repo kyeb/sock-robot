@@ -4,15 +4,12 @@ use esp_idf_svc::sys;
 
 pub fn uart_read_byte() -> Option<u8> {
     let mut byte = 0u8;
-    let read = unsafe {
-        sys::uart_read_bytes(
-            0,
-            &mut byte as *mut u8 as *mut _,
-            1,
-            1,
-        )
-    };
-    if read == 1 { Some(byte) } else { None }
+    let read = unsafe { sys::uart_read_bytes(0, &mut byte as *mut u8 as *mut _, 1, 1) };
+    if read == 1 {
+        Some(byte)
+    } else {
+        None
+    }
 }
 
 pub fn parse_command(line: &str) -> Option<Command> {
@@ -38,7 +35,8 @@ pub fn parse_command(line: &str) -> Option<Command> {
         "KP" => Some(Command::SetKp(val.clamp(0.0, 50.0))),
         "KI" => Some(Command::SetKi(val.clamp(0.0, 200.0))),
         "KD" => Some(Command::SetKd(val.clamp(0.0, 50.0))),
-        "TARGET" => Some(Command::SetTarget(val.clamp(-15.0, 15.0))),
+        "TVEL" => Some(Command::SetTargetVel(val.clamp(-5.0, 5.0))),
+        "TYAW" => Some(Command::SetTargetYawRate(val.clamp(-5.0, 5.0))),
         "VKP" => Some(Command::SetVelKp(val.clamp(0.0, 50.0))),
         "VKI" => Some(Command::SetVelKi(val.clamp(0.0, 200.0))),
         "VKD" => Some(Command::SetVelKd(val.clamp(0.0, 50.0))),
@@ -58,8 +56,12 @@ pub fn emit_telemetry(
     vel1: f32,
     vel2: f32,
 ) {
-    let accel_pitch = -((snap.imu.accel[0] as f64).atan2(snap.imu.accel[2] as f64).to_degrees() as f32);
-    let roll = -((snap.imu.accel[1] as f64).atan2(snap.imu.accel[2] as f64).to_degrees() as f32);
+    let accel_pitch = -((snap.imu.accel[0] as f64)
+        .atan2(snap.imu.accel[2] as f64)
+        .to_degrees() as f32);
+    let roll = -((snap.imu.accel[1] as f64)
+        .atan2(snap.imu.accel[2] as f64)
+        .to_degrees() as f32);
     println!(
         "{{\"t\":{},\"ax\":{:.3},\"ay\":{:.3},\"az\":{:.3},\"gx\":{:.3},\"gy\":{:.3},\"gz\":{:.3},\"temp\":{:.1},\"roll\":{:.1},\"pitch\":{:.1},\"ap\":{:.1},\"yr\":{:.1},\"pid\":{:.1},\"p\":{:.1},\"i\":{:.2},\"d\":{:.1},\"pid_on\":{},\"e1\":{},\"e2\":{},\"v1\":{:.1},\"v2\":{:.1},\"tp\":{:.2},\"op\":{:.2},\"wp\":{:.2},\"pc\":{:.3},\"yc\":{:.2}}}",
         snap.t_ms,

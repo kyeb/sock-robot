@@ -20,7 +20,13 @@ impl<'d, P1: OutputPin, P2: OutputPin> Motors<'d, P1, P2> {
         dir2: PinDriver<'d, P2, Output>,
     ) -> Self {
         let max_duty = pwm1.get_max_duty();
-        Self { pwm1, dir1, pwm2, dir2, max_duty }
+        Self {
+            pwm1,
+            dir1,
+            pwm2,
+            dir2,
+            max_duty,
+        }
     }
 
     pub fn apply(&mut self, cmd: MotorCommand) {

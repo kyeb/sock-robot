@@ -70,8 +70,10 @@ impl Estimator {
         let raw_vel2 = (d2 as f32 / COUNTS_PER_REV) * std::f32::consts::TAU / dt;
 
         // EMA low-pass filter on wheel velocity
-        self.filtered_vel1 = VEL_FILTER_ALPHA * self.filtered_vel1 + (1.0 - VEL_FILTER_ALPHA) * raw_vel1;
-        self.filtered_vel2 = VEL_FILTER_ALPHA * self.filtered_vel2 + (1.0 - VEL_FILTER_ALPHA) * raw_vel2;
+        self.filtered_vel1 =
+            VEL_FILTER_ALPHA * self.filtered_vel1 + (1.0 - VEL_FILTER_ALPHA) * raw_vel1;
+        self.filtered_vel2 =
+            VEL_FILTER_ALPHA * self.filtered_vel2 + (1.0 - VEL_FILTER_ALPHA) * raw_vel2;
 
         // Position from encoder counts directly (not integrated velocity — no lag or drift)
         let avg_counts = (snap.enc1 + snap.enc2) as f32 / 2.0;
@@ -83,8 +85,8 @@ impl Estimator {
 
         let yaw_rate = snap.imu.gyro[2].to_degrees();
 
-        self.filtered_pitch_rate = GYRO_FILTER_ALPHA * self.filtered_pitch_rate
-            + (1.0 - GYRO_FILTER_ALPHA) * gyro_rate;
+        self.filtered_pitch_rate =
+            GYRO_FILTER_ALPHA * self.filtered_pitch_rate + (1.0 - GYRO_FILTER_ALPHA) * gyro_rate;
 
         RobotState {
             pitch: self.angle,

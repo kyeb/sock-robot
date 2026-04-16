@@ -52,7 +52,14 @@ export function CurrentValues({ sample }: CurrentValuesProps) {
       <div className="flex gap-3">
         <ValueDisplay label="R" value={sample?.roll} unit={CHART_UNITS.orientation} color={orientColors[0]} precision={1} />
         <ValueDisplay label="P" value={sample?.pitch} unit={CHART_UNITS.orientation} color={orientColors[1]} precision={1} />
-        <ValueDisplay label="Y" value={sample?.yaw} unit={CHART_UNITS.orientation} color={orientColors[2]} precision={1} />
+        <ValueDisplay label="YR" value={sample?.yr} unit="°/s" color={orientColors[2]} precision={1} />
+      </div>
+      {/* Controller */}
+      <div className="flex gap-3">
+        <ValueDisplay label="PID" value={sample?.pid} unit="%" color="#00ff88" precision={1} />
+        <ValueDisplay label="TP" value={sample?.tp} unit="°" color="#00fff5" precision={2} />
+        <ValueDisplay label="PC" value={sample?.pc} unit="" color="#bb66ff" precision={3} />
+        <ValueDisplay label="YC" value={sample?.yc} unit="" color="#ffb000" precision={2} />
       </div>
       {/* Encoders */}
       <div className="flex gap-3">

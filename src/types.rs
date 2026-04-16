@@ -24,6 +24,7 @@ pub struct RobotState {
 
 pub struct ControlReference {
     pub target_vel: f32,
+    pub target_yaw_rate: f32,
     pub enabled: bool,
 }
 
@@ -39,7 +40,8 @@ pub enum Command {
     SetKp(f32),
     SetKi(f32),
     SetKd(f32),
-    SetTarget(f32),
+    SetTargetVel(f32),
+    SetTargetYawRate(f32),
     SetVelKp(f32),
     SetVelKi(f32),
     SetVelKd(f32),

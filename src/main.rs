@@ -39,7 +39,8 @@ fn main() {
         &TimerConfig::default().frequency(1.kHz().into()),
     )
     .unwrap();
-    let pwm1 = LedcDriver::new(peripherals.ledc.channel0, &timer1, peripherals.pins.gpio16).unwrap();
+    let pwm1 =
+        LedcDriver::new(peripherals.ledc.channel0, &timer1, peripherals.pins.gpio16).unwrap();
     let dir1 = PinDriver::output(peripherals.pins.gpio17).unwrap();
 
     let timer2 = LedcTimerDriver::new(
@@ -47,14 +48,23 @@ fn main() {
         &TimerConfig::default().frequency(1.kHz().into()),
     )
     .unwrap();
-    let pwm2 = LedcDriver::new(peripherals.ledc.channel1, &timer2, peripherals.pins.gpio18).unwrap();
+    let pwm2 =
+        LedcDriver::new(peripherals.ledc.channel1, &timer2, peripherals.pins.gpio18).unwrap();
     let dir2 = PinDriver::output(peripherals.pins.gpio19).unwrap();
 
     let mut motors = Motors::new(pwm1, dir1, pwm2, dir2);
 
     // Encoders
-    let enc1 = Encoder::new(peripherals.pcnt0, peripherals.pins.gpio23, peripherals.pins.gpio4);
-    let enc2 = Encoder::new(peripherals.pcnt1, peripherals.pins.gpio25, peripherals.pins.gpio26);
+    let enc1 = Encoder::new(
+        peripherals.pcnt0,
+        peripherals.pins.gpio23,
+        peripherals.pins.gpio4,
+    );
+    let enc2 = Encoder::new(
+        peripherals.pcnt1,
+        peripherals.pins.gpio25,
+        peripherals.pins.gpio26,
+    );
 
     // IMU
     let i2c = I2cDriver::new(
@@ -79,6 +89,7 @@ fn main() {
     let mut ctrl = BalanceController::new();
     let mut reference = ControlReference {
         target_vel: 0.0,
+        target_yaw_rate: 0.0,
         enabled: false,
     };
 
@@ -119,19 +130,61 @@ fn main() {
                                 motors.stop();
                                 info!("PID OFF");
                             }
-                            Some(Command::SetKp(v)) => { ctrl.angle_kp = v; info!("KP={:.2}", v); }
-                            Some(Command::SetKi(v)) => { info!("KI ignored in cascaded mode (use VKI). val={:.2}", v); }
-                            Some(Command::SetKd(v)) => { ctrl.angle_kd = v; info!("KD={:.2}", v); }
-                            Some(Command::SetTarget(v)) => { reference.target_vel = v; info!("TARGET_VEL={:.1}", v); }
-                            Some(Command::SetVelKp(v)) => { ctrl.vel_kp = v; info!("VKP={:.2}", v); }
-                            Some(Command::SetVelKi(v)) => { ctrl.vel_ki = v; ctrl.reset(); info!("VKI={:.2}", v); }
-                            Some(Command::SetVelKd(v)) => { ctrl.vel_kd = v; info!("VKD={:.2}", v); }
-                            Some(Command::SetPosKp(v)) => { ctrl.pos_kp = v; info!("PKP={:.2}", v); }
-                            Some(Command::SetPosKd(v)) => { ctrl.pos_kd = v; info!("PKD={:.2}", v); }
-                            Some(Command::SetYawKp(v)) => { ctrl.yaw_kp = v; info!("YKP={:.2}", v); }
-                            Some(Command::SetPitchBias(v)) => { ctrl.pitch_bias = v; info!("PBIAS={:.2}", v); }
-                            Some(Command::SetVelIntLimit(v)) => { ctrl.vel_integral_limit = v; info!("VILIM={:.2}", v); }
-                            None => { info!("ERR: unknown: {line}"); }
+                            Some(Command::SetKp(v)) => {
+                                ctrl.angle_kp = v;
+                                info!("KP={:.2}", v);
+                            }
+                            Some(Command::SetKi(v)) => {
+                                info!("KI ignored in cascaded mode (use VKI). val={:.2}", v);
+                            }
+                            Some(Command::SetKd(v)) => {
+                                ctrl.angle_kd = v;
+                                info!("KD={:.2}", v);
+                            }
+                            Some(Command::SetTargetVel(v)) => {
+                                reference.target_vel = v;
+                                info!("TVEL={:.2}", v);
+                            }
+                            Some(Command::SetTargetYawRate(v)) => {
+                                reference.target_yaw_rate = v;
+                                info!("TYAW={:.2}", v);
+                            }
+                            Some(Command::SetVelKp(v)) => {
+                                ctrl.vel_kp = v;
+                                info!("VKP={:.2}", v);
+                            }
+                            Some(Command::SetVelKi(v)) => {
+                                ctrl.vel_ki = v;
+                                ctrl.reset();
+                                info!("VKI={:.2}", v);
+                            }
+                            Some(Command::SetVelKd(v)) => {
+                                ctrl.vel_kd = v;
+                                info!("VKD={:.2}", v);
+                            }
+                            Some(Command::SetPosKp(v)) => {
+                                ctrl.pos_kp = v;
+                                info!("PKP={:.2}", v);
+                            }
+                            Some(Command::SetPosKd(v)) => {
+                                ctrl.pos_kd = v;
+                                info!("PKD={:.2}", v);
+                            }
+                            Some(Command::SetYawKp(v)) => {
+                                ctrl.yaw_kp = v;
+                                info!("YKP={:.2}", v);
+                            }
+                            Some(Command::SetPitchBias(v)) => {
+                                ctrl.pitch_bias = v;
+                                info!("PBIAS={:.2}", v);
+                            }
+                            Some(Command::SetVelIntLimit(v)) => {
+                                ctrl.vel_integral_limit = v;
+                                info!("VILIM={:.2}", v);
+                            }
+                            None => {
+                                info!("ERR: unknown: {line}");
+                            }
                         }
                     }
                 }
@@ -173,7 +226,13 @@ fn main() {
                 // 50Hz telemetry
                 if now.wrapping_sub(last_print_ms) >= 20 {
                     last_print_ms = now;
-                    comms::emit_telemetry(&state, &snapshot, &ctrl, estimator.filtered_vel1, estimator.filtered_vel2);
+                    comms::emit_telemetry(
+                        &state,
+                        &snapshot,
+                        &ctrl,
+                        estimator.filtered_vel1,
+                        estimator.filtered_vel2,
+                    );
                 }
             } else {
                 // IMU read failure: fail safe

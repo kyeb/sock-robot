@@ -11,13 +11,15 @@ export const CHART_COLORS = {
   gyro: [AMBER, GREEN, CYAN],
   orientation: [CORAL, GREEN, AMBER],
   encoders: [CYAN, PURPLE],
+  control: [CYAN, GREEN, AMBER, PURPLE],
 } as const
 
 export const CHART_LABELS = {
   accel: ['X', 'Y', 'Z'],
   gyro: ['X', 'Y', 'Z'],
-  orientation: ['Roll', 'Pitch', 'Yaw'],
+  orientation: ['Roll', 'Pitch', 'AccelPitch'],
   encoders: ['M1', 'M2'],
+  control: ['Effort', 'TargetPitch', 'PosCorr', 'YawCorr'],
 } as const
 
 export const CHART_UNITS = {
@@ -25,4 +27,5 @@ export const CHART_UNITS = {
   gyro: 'rad/s',
   orientation: '°',
   encoders: 'rad/s',
+  control: '',
 } as const

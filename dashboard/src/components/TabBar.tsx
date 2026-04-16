@@ -12,6 +12,7 @@ const TABS: { id: ChartTab; label: string; color: string }[] = [
   { id: 'gyro', label: 'GYRO', color: CHART_COLORS.gyro[0] },
   { id: 'orientation', label: 'ORIENT', color: CHART_COLORS.orientation[0] },
   { id: 'encoders', label: 'ENCODERS', color: CHART_COLORS.encoders[0] },
+  { id: 'control', label: 'CONTROL', color: CHART_COLORS.control[0] },
 ]
 
 export function TabBar({ active, onChange }: TabBarProps) {

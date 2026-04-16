@@ -93,7 +93,10 @@ impl BalanceController {
     pub fn update(&mut self, state: &RobotState, reference: &ControlReference) -> MotorCommand {
         if !reference.enabled || !self.enabled {
             self.reset();
-            return MotorCommand { left: 0.0, right: 0.0 };
+            return MotorCommand {
+                left: 0.0,
+                right: 0.0,
+            };
         }
 
         // Safety: disable if tipped over
@@ -101,7 +104,10 @@ impl BalanceController {
             self.enabled = false;
             self.reset();
             info!("SAFETY: controller disabled (tilt={:.1}deg)", state.pitch);
-            return MotorCommand { left: 0.0, right: 0.0 };
+            return MotorCommand {
+                left: 0.0,
+                right: 0.0,
+            };
         }
 
         // Outer loop: velocity error -> target pitch (runs at reduced rate)
@@ -111,6 +117,13 @@ impl BalanceController {
             let outer_dt = self.outer_dt_accum;
             self.outer_loop_counter = 0;
             self.outer_dt_accum = 0.0;
+
+            // Slide pose setpoints at commanded rates (Twist-style v/ω interface).
+            // home_pos/home_yaw track the command so position/heading hold does
+            // not fight commanded motion, and becomes stationkeeping when the
+            // command is zero.
+            self.home_pos += reference.target_vel * outer_dt;
+            self.home_yaw += reference.target_yaw_rate * outer_dt;
 
             // Position hold: PD on position error
             // P drives toward home, D damps approach to prevent overshoot
@@ -123,7 +136,9 @@ impl BalanceController {
             let base_vel_error = reference.target_vel - state.wheel_vel;
             let full_vel_error = base_vel_error + self.pos_correction;
             self.vel_integral += base_vel_error * outer_dt;
-            self.vel_integral = self.vel_integral.clamp(-self.vel_integral_limit, self.vel_integral_limit);
+            self.vel_integral = self
+                .vel_integral
+                .clamp(-self.vel_integral_limit, self.vel_integral_limit);
 
             self.outer_p = self.vel_kp * full_vel_error;
             self.outer_i = self.vel_ki * self.vel_integral;

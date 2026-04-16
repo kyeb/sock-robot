@@ -15,10 +15,15 @@ impl<'d> Imu<'d> {
     pub fn new(i2c: I2cDriver<'d>, addr: u8) -> Self {
         let mut dev = Lsm6dso::new(i2c, addr);
         dev.check().expect("LSM6DSO not found on I2C bus");
-        dev.set_accelerometer_output(AccelerometerOutput::Rate416).unwrap();
+        dev.set_accelerometer_output(AccelerometerOutput::Rate416)
+            .unwrap();
         dev.set_gyroscope_output(GyroscopeOutput::Rate416).unwrap();
         dev.set_gyroscope_scale(GyroscopeFullScale::Dps500).unwrap();
-        Self { dev, gyro_bias_y: 0.0, gyro_bias_z: 0.0 }
+        Self {
+            dev,
+            gyro_bias_y: 0.0,
+            gyro_bias_z: 0.0,
+        }
     }
 
     pub fn calibrate_bias(&mut self, samples: usize) {
@@ -38,7 +43,10 @@ impl<'d> Imu<'d> {
             self.gyro_bias_y = sum_y / valid as f32;
             self.gyro_bias_z = sum_z / valid as f32;
         }
-        info!("Gyro bias: Y={:.4} Z={:.4} rad/s ({}/{} samples)", self.gyro_bias_y, self.gyro_bias_z, valid, samples);
+        info!(
+            "Gyro bias: Y={:.4} Z={:.4} rad/s ({}/{} samples)",
+            self.gyro_bias_y, self.gyro_bias_z, valid, samples
+        );
     }
 
     pub fn read(&mut self) -> Option<ImuReading> {

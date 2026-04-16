@@ -7,7 +7,7 @@ import { TAB_COLUMNS } from '~/lib/types'
 
 interface ChartProps {
   dataRef: React.RefObject<number[][]>
-  tab: ChartTab
+  tab: Exclude<ChartTab, 'all'>
   timeWindow: number
   visible: boolean
 }

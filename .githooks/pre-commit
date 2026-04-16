@@ -1,0 +1,60 @@
+#!/usr/bin/env bun
+import { spawn } from "bun";
+
+type Check = { name: string; cmd: string[]; cwd?: string };
+
+const run = async ({ name, cmd, cwd }: Check) => {
+  const started = Date.now();
+  const proc = spawn({ cmd, cwd, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { name, exitCode, stdout, stderr, ms: Date.now() - started };
+};
+
+// Auto-format Rust, then re-stage formatted files.
+// Caveat: if a .rs file has both staged and unstaged hunks (git add -p),
+// the unstaged hunks get swept into the commit. Rare in solo dev.
+const stagedRust = (
+  await new Response(
+    spawn({
+      cmd: ["git", "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR", "--", "*.rs"],
+      stdout: "pipe",
+    }).stdout,
+  ).text()
+)
+  .split("\0")
+  .filter(Boolean);
+
+const fmtResult = await run({ name: "cargo fmt", cmd: ["cargo", "fmt"] });
+if (fmtResult.exitCode !== 0) {
+  console.error(fmtResult.stderr);
+  process.exit(1);
+}
+if (stagedRust.length > 0) {
+  await spawn({ cmd: ["git", "add", "--", ...stagedRust] }).exited;
+}
+
+const checks: Check[] = [
+  { name: "cargo clippy", cmd: ["cargo", "clippy", "--all-targets", "--", "-D", "warnings"] },
+  { name: "dashboard tsc", cmd: ["npx", "tsc", "--noEmit"], cwd: "dashboard" },
+];
+
+const results = await Promise.all(checks.map(run));
+
+for (const r of results) {
+  const status = r.exitCode === 0 ? "✓" : "✗";
+  console.log(`${status} ${r.name} (${r.ms}ms)`);
+  if (r.exitCode !== 0) {
+    if (r.stdout.trim()) console.log(r.stdout);
+    if (r.stderr.trim()) console.error(r.stderr);
+  }
+}
+
+const failed = results.filter((r) => r.exitCode !== 0);
+if (failed.length > 0) {
+  console.error(`\n${failed.length} check(s) failed: ${failed.map((f) => f.name).join(", ")}`);
+  process.exit(1);
+}

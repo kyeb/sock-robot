@@ -38,15 +38,16 @@ function makeSeries(colors: readonly string[], labels: string[]): uPlot.Series[]
   ]
 }
 
-const SERIES_CONFIG: Record<ChartTab, { labels: string[]; yRange: [number, number] | null }> = {
+const SERIES_CONFIG: Record<Exclude<ChartTab, 'all'>, { labels: string[]; yRange: [number, number] | null }> = {
   accel: { labels: ['X', 'Y', 'Z'], yRange: [-20, 20] },
   gyro: { labels: ['X', 'Y', 'Z'], yRange: [-5, 5] },
-  orientation: { labels: ['Roll', 'Pitch', 'Yaw'], yRange: [-180, 180] },
+  orientation: { labels: ['Roll', 'Pitch', 'AccelPitch'], yRange: [-30, 30] },
   encoders: { labels: ['M1', 'M2'], yRange: null },
+  control: { labels: ['Effort', 'TargetPitch', 'PosCorr', 'YawCorr'], yRange: null },
 }
 
 export function createChartOptions(
-  tab: ChartTab,
+  tab: Exclude<ChartTab, 'all'>,
   width: number,
   height: number,
   timeWindow: number,
