@@ -16,3 +16,4 @@ Do NOT use `cargo espflash flash --monitor` from Claude — the monitor needs a 
 - **UART:** Firmware uses raw `uart_read_bytes` from ESP-IDF sys, not the HAL `UartDriver` (which conflicts with ESP-IDF's UART0 logging).
 - **Toolchain:** Uses the `esp` Rust toolchain channel (xtensa target). See `rust-toolchain.toml`.
 - **Serial port:** `/dev/cu.usbserial-0001`
+- **Best tag:** When tuning produces a new best-performing commit, update the `best` git tag: `git tag -f best && git push -f origin best`
