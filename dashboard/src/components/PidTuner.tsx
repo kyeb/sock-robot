@@ -43,20 +43,20 @@ function ParamRow({ label, value, step, min, max, precision, onChange, disabled 
 
 export function PidTuner({ sendCommand, connected }: PidTunerProps) {
   // Inner loop (angle)
-  const [kp, setKp] = useState(15.0)
-  const [kd, setKd] = useState(0.35)
+  const [kp, setKp] = useState(10.0)
+  const [kd, setKd] = useState(0.5)
   // Outer loop (velocity)
-  const [vkp, setVkp] = useState(0.5)
-  const [vki, setVki] = useState(0.2)
-  const [vkd, setVkd] = useState(0.02)
+  const [vkp, setVkp] = useState(0.25)
+  const [vki, setVki] = useState(0.0)
+  const [vkd, setVkd] = useState(0.0)
   const [vilim, setVilim] = useState(4.0)
   // Position hold
-  const [pkp, setPkp] = useState(0.3)
-  const [pkd, setPkd] = useState(0.02)
+  const [pkp, setPkp] = useState(0.5)
+  const [pkd, setPkd] = useState(0.4)
   // Yaw correction
-  const [ykp, setYkp] = useState(1.0)
+  const [ykp, setYkp] = useState(0.5)
   // Bias / target
-  const [pbias, setPbias] = useState(1.35)
+  const [pbias, setPbias] = useState(1.25)
   const [tvel, setTvel] = useState(0.0)
   const [tyaw, setTyaw] = useState(0.0)
   const [enabled, setEnabled] = useState(false)
@@ -146,29 +146,29 @@ export function PidTuner({ sendCommand, connected }: PidTunerProps) {
         </div>
       </div>
       <div className="flex flex-wrap gap-x-6 gap-y-1">
-        <ParamRow label="KP" value={kp} step={0.5} min={0} max={50} precision={1}
+        <ParamRow label="KP" value={kp} step={1.0} min={0} max={50} precision={1}
           disabled={!connected} onChange={(v) => updateParam('KP', v, setKp)} />
-        <ParamRow label="KD" value={kd} step={0.05} min={0} max={50} precision={2}
+        <ParamRow label="KD" value={kd} step={0.1} min={0} max={50} precision={2}
           disabled={!connected} onChange={(v) => updateParam('KD', v, setKd)} />
-        <ParamRow label="VKP" value={vkp} step={0.05} min={0} max={50} precision={2}
+        <ParamRow label="VKP" value={vkp} step={0.1} min={0} max={50} precision={2}
           disabled={!connected} onChange={(v) => updateParam('VKP', v, setVkp)} />
-        <ParamRow label="VKI" value={vki} step={0.05} min={0} max={200} precision={2}
+        <ParamRow label="VKI" value={vki} step={0.1} min={0} max={200} precision={2}
           disabled={!connected} onChange={(v) => updateParam('VKI', v, setVki)} />
-        <ParamRow label="VKD" value={vkd} step={0.01} min={0} max={50} precision={2}
+        <ParamRow label="VKD" value={vkd} step={0.02} min={0} max={50} precision={2}
           disabled={!connected} onChange={(v) => updateParam('VKD', v, setVkd)} />
-        <ParamRow label="VILIM" value={vilim} step={0.5} min={0.1} max={20} precision={1}
+        <ParamRow label="VILIM" value={vilim} step={1.0} min={0.1} max={20} precision={1}
           disabled={!connected} onChange={(v) => updateParam('VILIM', v, setVilim)} />
-        <ParamRow label="PKP" value={pkp} step={0.05} min={0} max={10} precision={2}
+        <ParamRow label="PKP" value={pkp} step={0.1} min={0} max={10} precision={2}
           disabled={!connected} onChange={(v) => updateParam('PKP', v, setPkp)} />
-        <ParamRow label="PKD" value={pkd} step={0.01} min={0} max={10} precision={2}
+        <ParamRow label="PKD" value={pkd} step={0.02} min={0} max={10} precision={2}
           disabled={!connected} onChange={(v) => updateParam('PKD', v, setPkd)} />
-        <ParamRow label="YKP" value={ykp} step={0.1} min={0} max={10} precision={2}
+        <ParamRow label="YKP" value={ykp} step={0.2} min={0} max={10} precision={2}
           disabled={!connected} onChange={(v) => updateParam('YKP', v, setYkp)} />
-        <ParamRow label="PBIAS" value={pbias} step={0.05} min={-5} max={5} precision={2}
+        <ParamRow label="PBIAS" value={pbias} step={0.1} min={-5} max={5} precision={2}
           disabled={!connected} onChange={(v) => updateParam('PBIAS', v, setPbias)} />
-        <ParamRow label="TVEL" value={tvel} step={0.1} min={-5} max={5} precision={2}
+        <ParamRow label="TVEL" value={tvel} step={0.5} min={-5} max={5} precision={2}
           disabled={!connected} onChange={(v) => updateParam('TVEL', v, setTvel)} />
-        <ParamRow label="TYAW" value={tyaw} step={0.1} min={-5} max={5} precision={2}
+        <ParamRow label="TYAW" value={tyaw} step={0.5} min={-5} max={5} precision={2}
           disabled={!connected} onChange={(v) => updateParam('TYAW', v, setTyaw)} />
       </div>
     </div>

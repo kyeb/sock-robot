@@ -12,6 +12,7 @@ Usage: scripts/cmd.py PID_ON
        scripts/cmd.py watch [seconds]     # live 1Hz samples
        scripts/cmd.py diagnose [seconds]  # full diagnostic report
        scripts/cmd.py gains               # show current gains from telemetry
+       scripts/cmd.py pidrun              # analyze most recent PID-on run in log
 """
 import asyncio
 import glob
@@ -297,6 +298,113 @@ def cmd_watch(seconds):
                 continue
 
 
+def cmd_pidrun(last_seconds: float | None = None):
+    """Analyze the most recent contiguous PID-on run across all logs.
+
+    If last_seconds is given, only the trailing window of the run is used —
+    useful for isolating the effect of a recent gain change.
+    """
+    import statistics
+
+    # Walk logs from newest to oldest, collect the latest contiguous on-run
+    logs = sorted(glob.glob("data/*.jsonl"), key=os.path.getmtime, reverse=True)
+    run = []
+    for path in logs:
+        samples = []
+        with open(path) as f:
+            for line in f:
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    continue
+                if d.get("pid_on") == 1:
+                    samples.append(d)
+        if samples:
+            # split into runs (gap > 500ms)
+            runs = []
+            cur = []
+            for s in samples:
+                if cur and s["t"] - cur[-1]["t"] > 500:
+                    runs.append(cur)
+                    cur = []
+                cur.append(s)
+            if cur:
+                runs.append(cur)
+            run = runs[-1]
+            print(f"log: {path}")
+            break
+    if not run:
+        print("no PID-on runs found")
+        return
+    if last_seconds is not None:
+        cutoff = run[-1]["t"] - last_seconds * 1000
+        run = [s for s in run if s["t"] >= cutoff]
+        if not run:
+            print(f"no samples in last {last_seconds}s")
+            return
+    dur = (run[-1]["t"] - run[0]["t"]) / 1000
+    print(f"run: t={run[0]['t']}..{run[-1]['t']} ({dur:.2f}s, {len(run)} samples)")
+    pitches = [s["pitch"] for s in run]
+    efforts = [s["pid"] for s in run]
+    tps = [s["tp"] for s in run]
+    ps = [s["p"] for s in run]
+    ds = [s["d"] for s in run]
+    lhzs = [s["lhz"] for s in run]
+    print(
+        f"pitch: [{min(pitches):.2f}, {max(pitches):.2f}] std={statistics.stdev(pitches) if len(pitches)>1 else 0:.2f}"
+    )
+    print(f"effort: [{min(efforts):.1f}, {max(efforts):.1f}]")
+    print(f"tp:     [{min(tps):.2f}, {max(tps):.2f}]")
+    print(f"inner_p:[{min(ps):.1f}, {max(ps):.1f}]")
+    print(f"inner_d:[{min(ds):.1f}, {max(ds):.1f}]")
+    print(f"loop_hz:[{min(lhzs):.1f}, {max(lhzs):.1f}]")
+    # Back out KP from telemetry: inner_p = kp * (pitch - pbias - tp); pbias=1.35 default
+    kps = []
+    for s in run:
+        err = (s["pitch"] - 1.35) - s["tp"]
+        if abs(err) > 2 and abs(s["p"]) > 20:
+            kps.append(s["p"] / err)
+    if kps:
+        print(f"implied KP (from telemetry): {statistics.median(kps):.2f}")
+    # Dominant frequency from zero crossings around mean
+    pm = sum(pitches) / len(pitches)
+    xs = 0
+    for i in range(1, len(pitches)):
+        if (pitches[i - 1] - pm) * (pitches[i] - pm) < 0:
+            xs += 1
+    if xs and dur > 0:
+        print(f"pitch zero-cross freq: {xs/2/dur:.2f} Hz")
+
+    # Separate fast (ring) vs slow (drift) components via 1s moving-average.
+    # Fast = pitch - slow (high-frequency content). Slow = 1s moving mean.
+    # Approximates a 1Hz low-pass boundary.
+    wsize = max(1, int(len(run) / max(dur, 1e-3)))  # ~1s window in samples
+    slow = []
+    total = 0.0
+    q = []
+    for s in run:
+        q.append(s["pitch"])
+        total += s["pitch"]
+        if len(q) > wsize:
+            total -= q.pop(0)
+        slow.append(total / len(q))
+    fast = [pitches[i] - slow[i] for i in range(len(pitches))]
+    slow_range = max(slow) - min(slow)
+    fast_std = statistics.stdev(fast) if len(fast) > 1 else 0
+    # Slow zero crossings around slow-mean
+    sm = sum(slow) / len(slow)
+    sxs = 0
+    for i in range(1, len(slow)):
+        if (slow[i - 1] - sm) * (slow[i] - sm) < 0:
+            sxs += 1
+    print(
+        f"fast (>1Hz): std={fast_std:.2f}°   slow (<1Hz): range={slow_range:.2f}°, "
+        f"freq={sxs/2/dur if sxs and dur>0 else 0:.3f} Hz"
+    )
+    wps = [s["wp"] for s in run]
+    print(f"wheel_pos drift: [{min(wps):.2f}, {max(wps):.2f}]  span={max(wps)-min(wps):.2f} rad")
+
+
 async def cmd_send(msg):
     async with websockets.connect(WS_URL) as ws:
         await ws.send(msg)
@@ -321,6 +429,9 @@ def main():
         cmd_diagnose(seconds)
     elif cmd == "gains":
         cmd_gains()
+    elif cmd == "pidrun":
+        last = float(sys.argv[2]) if len(sys.argv) > 2 else None
+        cmd_pidrun(last)
     else:
         msg = " ".join(sys.argv[1:])
         asyncio.run(cmd_send(msg))

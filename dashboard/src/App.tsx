@@ -81,7 +81,7 @@ export function App() {
       )}
 
       {/* Bottom HUD */}
-      <StatusBar status={status} hz={hz} samples={sampleCount} />
+      <StatusBar status={status} hz={hz} samples={sampleCount} loopHz={latest?.lhz ?? null} />
     </div>
   )
 }

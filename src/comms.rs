@@ -49,12 +49,68 @@ pub fn parse_command(line: &str) -> Option<Command> {
     }
 }
 
+struct JsonLine {
+    buf: heapless::String<512>,
+    first: bool,
+}
+
+impl JsonLine {
+    fn new() -> Self {
+        let mut s = Self {
+            buf: heapless::String::new(),
+            first: true,
+        };
+        let _ = s.buf.push('{');
+        s
+    }
+
+    fn sep(&mut self) {
+        if !self.first {
+            let _ = self.buf.push(',');
+        }
+        self.first = false;
+    }
+
+    fn num(&mut self, k: &str, v: impl core::fmt::Display) -> &mut Self {
+        use core::fmt::Write;
+        self.sep();
+        let _ = write!(self.buf, "\"{}\":{}", k, v);
+        self
+    }
+
+    fn flt(&mut self, k: &str, v: f32, prec: usize) -> &mut Self {
+        use core::fmt::Write;
+        self.sep();
+        let _ = write!(self.buf, "\"{}\":{:.*}", k, prec, v);
+        self
+    }
+
+    fn flag(&mut self, k: &str, v: bool) -> &mut Self {
+        self.num(k, v as u8)
+    }
+
+    /// Non-blocking send: drop the line if the TX ring is full so the
+    /// control loop is never stalled on UART I/O.
+    fn emit(&mut self) {
+        let _ = self.buf.push('}');
+        let _ = self.buf.push('\n');
+        unsafe {
+            let mut free: usize = 0;
+            sys::uart_get_tx_buffer_free_size(0, &mut free);
+            if free >= self.buf.len() {
+                sys::uart_write_bytes(0, self.buf.as_ptr() as *const _, self.buf.len());
+            }
+        }
+    }
+}
+
 pub fn emit_telemetry(
     state: &RobotState,
     snap: &SensorSnapshot,
     ctrl: &BalanceController,
     vel1: f32,
     vel2: f32,
+    loop_hz: f32,
 ) {
     let accel_pitch = -((snap.imu.accel[0] as f64)
         .atan2(snap.imu.accel[2] as f64)
@@ -62,18 +118,34 @@ pub fn emit_telemetry(
     let roll = -((snap.imu.accel[1] as f64)
         .atan2(snap.imu.accel[2] as f64)
         .to_degrees() as f32);
-    println!(
-        "{{\"t\":{},\"ax\":{:.3},\"ay\":{:.3},\"az\":{:.3},\"gx\":{:.3},\"gy\":{:.3},\"gz\":{:.3},\"temp\":{:.1},\"roll\":{:.1},\"pitch\":{:.1},\"ap\":{:.1},\"yr\":{:.1},\"pid\":{:.1},\"p\":{:.1},\"i\":{:.2},\"d\":{:.1},\"pid_on\":{},\"e1\":{},\"e2\":{},\"v1\":{:.1},\"v2\":{:.1},\"tp\":{:.2},\"op\":{:.2},\"wp\":{:.2},\"pc\":{:.3},\"yc\":{:.2}}}",
-        snap.t_ms,
-        snap.imu.accel[0], snap.imu.accel[1], snap.imu.accel[2],
-        snap.imu.gyro[0], snap.imu.gyro[1], snap.imu.gyro[2],
-        snap.imu.temp,
-        roll, state.pitch, accel_pitch, state.yaw_rate,
-        ctrl.effort, ctrl.inner_p, ctrl.outer_i, ctrl.inner_d,
-        ctrl.enabled,
-        snap.enc1, snap.enc2,
-        vel1, vel2,
-        ctrl.target_pitch, ctrl.outer_p,
-        state.wheel_pos, ctrl.pos_correction, ctrl.yaw_correction,
-    );
+
+    JsonLine::new()
+        .num("t", snap.t_ms)
+        .flt("ax", snap.imu.accel[0], 3)
+        .flt("ay", snap.imu.accel[1], 3)
+        .flt("az", snap.imu.accel[2], 3)
+        .flt("gx", snap.imu.gyro[0], 3)
+        .flt("gy", snap.imu.gyro[1], 3)
+        .flt("gz", snap.imu.gyro[2], 3)
+        .flt("temp", snap.imu.temp, 1)
+        .flt("roll", roll, 1)
+        .flt("pitch", state.pitch, 1)
+        .flt("ap", accel_pitch, 1)
+        .flt("yr", state.yaw_rate, 1)
+        .flt("pid", ctrl.effort, 1)
+        .flt("p", ctrl.inner_p, 1)
+        .flt("i", ctrl.outer_i, 2)
+        .flt("d", ctrl.inner_d, 1)
+        .flag("pid_on", ctrl.enabled)
+        .num("e1", snap.enc1)
+        .num("e2", snap.enc2)
+        .flt("v1", vel1, 1)
+        .flt("v2", vel2, 1)
+        .flt("tp", ctrl.target_pitch, 2)
+        .flt("op", ctrl.outer_p, 2)
+        .flt("wp", state.wheel_pos, 2)
+        .flt("pc", ctrl.pos_correction, 3)
+        .flt("yc", ctrl.yaw_correction, 2)
+        .flt("lhz", loop_hz, 1)
+        .emit();
 }

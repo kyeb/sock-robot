@@ -121,9 +121,25 @@ impl BalanceController {
             // Slide pose setpoints at commanded rates (Twist-style v/ω interface).
             // home_pos/home_yaw track the command so position/heading hold does
             // not fight commanded motion, and becomes stationkeeping when the
-            // command is zero.
+            // command is zero. While a command is active, clamp the setpoint
+            // distance from the actual position so reversing direction responds
+            // immediately; when the command is zero we skip the clamp so the
+            // position loop pulls the robot all the way back to its anchor.
             self.home_pos += reference.target_vel * outer_dt;
             self.home_yaw += reference.target_yaw_rate * outer_dt;
+            const POS_LEAD_MAX: f32 = 1.0; // rad
+            const YAW_LEAD_MAX: f32 = 1.0; // rad (encoder-derived)
+            if reference.target_vel != 0.0 {
+                self.home_pos = self.home_pos.clamp(
+                    state.wheel_pos - POS_LEAD_MAX,
+                    state.wheel_pos + POS_LEAD_MAX,
+                );
+            }
+            if reference.target_yaw_rate != 0.0 {
+                self.home_yaw = self
+                    .home_yaw
+                    .clamp(state.yaw_pos - YAW_LEAD_MAX, state.yaw_pos + YAW_LEAD_MAX);
+            }
 
             // Position hold: PD on position error
             // P drives toward home, D damps approach to prevent overshoot

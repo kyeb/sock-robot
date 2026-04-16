@@ -1460,6 +1460,7 @@ dependencies = [
  "ahrs",
  "embuild",
  "esp-idf-svc",
+ "heapless",
  "log",
  "lsm6dso",
  "nalgebra",

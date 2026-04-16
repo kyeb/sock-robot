@@ -25,6 +25,7 @@ export interface IMUSample {
   wp: number   // wheel position
   pc: number   // position correction
   yc: number   // yaw correction
+  lhz: number  // inner control-loop rate (Hz)
 }
 
 export type ChartTab = 'all' | 'accel' | 'gyro' | 'orientation' | 'encoders' | 'control'

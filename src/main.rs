@@ -30,7 +30,10 @@ fn main() {
     let peripherals = Peripherals::take().unwrap();
 
     unsafe {
-        sys::uart_driver_install(0, 1024, 0, 0, std::ptr::null_mut(), 0);
+        // TX ring buffer of 4096 so telemetry writes with 0 timeout never
+        // block the control loop — if the host stops draining, lines drop
+        // instead of stalling the 200Hz loop.
+        sys::uart_driver_install(0, 1024, 4096, 0, std::ptr::null_mut(), 0);
     }
 
     // Motors
@@ -100,6 +103,7 @@ fn main() {
     let mut buf_overflow = false;
     let mut last_imu_ms = millis();
     let mut last_print_ms = millis();
+    let mut inner_loop_count: u32 = 0;
 
     loop {
         // Handle serial commands (non-blocking)
@@ -222,9 +226,17 @@ fn main() {
 
                 // Always apply command — if controller disabled, it returns zero
                 motors.apply(cmd);
+                inner_loop_count += 1;
 
                 // 50Hz telemetry
                 if now.wrapping_sub(last_print_ms) >= 20 {
+                    let elapsed_s = now.wrapping_sub(last_print_ms) as f32 / 1000.0;
+                    let loop_hz = if elapsed_s > 0.0 {
+                        inner_loop_count as f32 / elapsed_s
+                    } else {
+                        0.0
+                    };
+                    inner_loop_count = 0;
                     last_print_ms = now;
                     comms::emit_telemetry(
                         &state,
@@ -232,6 +244,7 @@ fn main() {
                         &ctrl,
                         estimator.filtered_vel1,
                         estimator.filtered_vel2,
+                        loop_hz,
                     );
                 }
             } else {

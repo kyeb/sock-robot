@@ -33,11 +33,10 @@ Encoder Vcc → 3V3, IMU Vcc → 3V3, all GND → common ground.
 scripts/bridge.py          # WebSocket bridge (serial → ws://localhost:8080)
 cd dashboard && pnpm dev   # Dashboard at http://localhost:3000
 
-# PID tuning trial
-scripts/tune.py            # Interactive tuning with live stats
-
-# Analyze saved trials
-scripts/analyze_trials.py data/trials/trial_*.jsonl
+# Send commands / inspect live telemetry
+scripts/cmd.py PID_ON
+scripts/cmd.py VKP 0.5
+scripts/cmd.py diagnose    # full diagnostic report
 ```
 
 ## Sign conventions

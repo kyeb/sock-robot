@@ -4,6 +4,7 @@ interface StatusBarProps {
   status: ConnectionStatus
   hz: number
   samples: number
+  loopHz: number | null
 }
 
 const STATUS_COLORS: Record<ConnectionStatus, string> = {
@@ -18,9 +19,12 @@ const STATUS_LABELS: Record<ConnectionStatus, string> = {
   disconnected: 'DISCONNECTED',
 }
 
-export function StatusBar({ status, hz, samples }: StatusBarProps) {
+export function StatusBar({ status, hz, samples, loopHz }: StatusBarProps) {
   const color = STATUS_COLORS[status]
   const label = STATUS_LABELS[status]
+
+  const loopColor =
+    loopHz == null ? '#555' : loopHz >= 190 ? '#00ff88' : loopHz >= 150 ? '#ffb000' : '#ff4444'
 
   return (
     <div className="flex items-center gap-4 py-2 text-[10px] tracking-widest uppercase text-[#444] border-t border-[#181818]">
@@ -33,7 +37,11 @@ export function StatusBar({ status, hz, samples }: StatusBarProps) {
       </div>
       <span className="text-[#555]">|</span>
       <span>
-        <span className="text-[#00fff5]">{hz}</span> Hz
+        tele <span className="text-[#00fff5]">{hz}</span> Hz
+      </span>
+      <span className="text-[#555]">|</span>
+      <span>
+        loop <span style={{ color: loopColor }}>{loopHz != null ? loopHz.toFixed(0) : '—'}</span> Hz
       </span>
       <span className="text-[#555]">|</span>
       <span>

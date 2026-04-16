@@ -26,7 +26,7 @@ import websockets
 from websockets.asyncio.server import serve
 
 PORT = "/dev/cu.usbserial-0001"
-BAUD = 115200
+BAUD = 921600
 WEB_PORT = 8080
 
 clients: set = set()

@@ -2,9 +2,16 @@ use crate::types::{ImuReading, RobotState, SensorSnapshot};
 
 // 64 CPR (already includes quadrature) × 50:1 gearbox = 3,200 counts per output shaft rev
 const COUNTS_PER_REV: f32 = 3_200.0;
-const COMP_ALPHA: f32 = 0.98;
-const VEL_FILTER_ALPHA: f32 = 0.8;
-const GYRO_FILTER_ALPHA: f32 = 0.85;
+
+// Filter time constants (seconds). alpha = exp(-dt/tau) is computed each
+// tick so filter behavior is sample-rate-independent.
+const COMP_TC_S: f32 = 0.495;
+const VEL_FILTER_TC_S: f32 = 0.045;
+const GYRO_FILTER_TC_S: f32 = 0.062;
+
+fn ema_alpha(dt: f32, tc: f32) -> f32 {
+    (-dt / tc).exp()
+}
 
 fn accel_angle(ax: f32, az: f32) -> f32 {
     -((ax as f64).atan2(az as f64).to_degrees() as f32)
@@ -58,7 +65,8 @@ impl Estimator {
         // Complementary filter for pitch
         let gyro_rate = snap.imu.gyro[1].to_degrees();
         let accel_ang = accel_angle(snap.imu.accel[0], snap.imu.accel[2]);
-        self.angle = COMP_ALPHA * (self.angle + gyro_rate * dt) + (1.0 - COMP_ALPHA) * accel_ang;
+        let comp_alpha = ema_alpha(dt, COMP_TC_S);
+        self.angle = comp_alpha * (self.angle + gyro_rate * dt) + (1.0 - comp_alpha) * accel_ang;
 
         // Encoder deltas -> wheel velocity
         let d1 = snap.enc1 - self.prev_enc1;
@@ -70,10 +78,9 @@ impl Estimator {
         let raw_vel2 = (d2 as f32 / COUNTS_PER_REV) * std::f32::consts::TAU / dt;
 
         // EMA low-pass filter on wheel velocity
-        self.filtered_vel1 =
-            VEL_FILTER_ALPHA * self.filtered_vel1 + (1.0 - VEL_FILTER_ALPHA) * raw_vel1;
-        self.filtered_vel2 =
-            VEL_FILTER_ALPHA * self.filtered_vel2 + (1.0 - VEL_FILTER_ALPHA) * raw_vel2;
+        let vel_alpha = ema_alpha(dt, VEL_FILTER_TC_S);
+        self.filtered_vel1 = vel_alpha * self.filtered_vel1 + (1.0 - vel_alpha) * raw_vel1;
+        self.filtered_vel2 = vel_alpha * self.filtered_vel2 + (1.0 - vel_alpha) * raw_vel2;
 
         // Position from encoder counts directly (not integrated velocity — no lag or drift)
         let avg_counts = (snap.enc1 + snap.enc2) as f32 / 2.0;
@@ -85,8 +92,9 @@ impl Estimator {
 
         let yaw_rate = snap.imu.gyro[2].to_degrees();
 
+        let gyro_alpha = ema_alpha(dt, GYRO_FILTER_TC_S);
         self.filtered_pitch_rate =
-            GYRO_FILTER_ALPHA * self.filtered_pitch_rate + (1.0 - GYRO_FILTER_ALPHA) * gyro_rate;
+            gyro_alpha * self.filtered_pitch_rate + (1.0 - gyro_alpha) * gyro_rate;
 
         RobotState {
             pitch: self.angle,
