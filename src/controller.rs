@@ -6,14 +6,17 @@ pub struct BalanceController {
     pub angle_kp: f32,
     pub angle_kd: f32,
 
-    // Outer loop (~50Hz): velocity PI
+    // Outer loop (~50Hz): velocity PID
     pub vel_kp: f32,
     pub vel_ki: f32,
+    pub vel_kd: f32,
     vel_integral: f32,
     pub vel_integral_limit: f32,
+    prev_vel_error: f32,
 
     // Position hold: P on wheel_pos -> target_vel offset
     pub pos_kp: f32,
+    pub pos_kd: f32,
     home_pos: f32,
 
     // Yaw correction: P on encoder divergence -> differential effort
@@ -49,16 +52,26 @@ impl BalanceController {
 
             vel_kp: 0.5,
             vel_ki: 0.2,
+            vel_kd: 0.02,
             vel_integral: 0.0,
             vel_integral_limit: 4.0,
+            prev_vel_error: 0.0,
 
             pos_kp: 0.3,
+            pos_kd: 0.02,
             home_pos: 0.0,
 
             yaw_kp: 1.0,
             home_yaw: 0.0,
 
-            pitch_bias: 0.0,
+            // Tuned by iterating: set PBIAS at runtime, toggle PID off/on with
+            // 50-200ms gaps, and measure startup drift (dwp). When PBIAS matches the
+            // robot's physical balance angle, the integrator starts near zero and the
+            // robot doesn't drift on PID restart. Found by observing that the integrator
+            // was always saturated compensating for the CoG offset — this moves that
+            // constant offset out of the integrator and into a fixed bias, freeing the
+            // integrator for dynamic corrections.
+            pitch_bias: 1.35,
 
             outer_loop_counter: 0,
             outer_loop_divisor: 4,
@@ -99,9 +112,10 @@ impl BalanceController {
             self.outer_loop_counter = 0;
             self.outer_dt_accum = 0.0;
 
-            // Position hold: position error drives a velocity correction
+            // Position hold: PD on position error
+            // P drives toward home, D damps approach to prevent overshoot
             let pos_error = self.home_pos - state.wheel_pos;
-            self.pos_correction = self.pos_kp * pos_error;
+            self.pos_correction = self.pos_kp * pos_error - self.pos_kd * state.wheel_vel;
 
             // Velocity loop: P sees full error (including position correction),
             // but integrator only tracks the base velocity error (excluding position
@@ -113,7 +127,13 @@ impl BalanceController {
 
             self.outer_p = self.vel_kp * full_vel_error;
             self.outer_i = self.vel_ki * self.vel_integral;
-            self.target_pitch = (self.outer_p + self.outer_i).clamp(-15.0, 15.0);
+            let outer_d = if outer_dt > 0.0 {
+                self.vel_kd * (full_vel_error - self.prev_vel_error) / outer_dt
+            } else {
+                0.0
+            };
+            self.prev_vel_error = full_vel_error;
+            self.target_pitch = (self.outer_p + self.outer_i + outer_d).clamp(-15.0, 15.0);
         }
 
         // Inner loop: pitch error -> motor effort (every cycle, 200Hz)
@@ -140,6 +160,7 @@ impl BalanceController {
 
     pub fn reset(&mut self) {
         self.vel_integral = 0.0;
+        self.prev_vel_error = 0.0;
         self.target_pitch = 0.0;
         self.outer_loop_counter = 0;
         self.outer_dt_accum = 0.0;

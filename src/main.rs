@@ -125,7 +125,9 @@ fn main() {
                             Some(Command::SetTarget(v)) => { reference.target_vel = v; info!("TARGET_VEL={:.1}", v); }
                             Some(Command::SetVelKp(v)) => { ctrl.vel_kp = v; info!("VKP={:.2}", v); }
                             Some(Command::SetVelKi(v)) => { ctrl.vel_ki = v; ctrl.reset(); info!("VKI={:.2}", v); }
+                            Some(Command::SetVelKd(v)) => { ctrl.vel_kd = v; info!("VKD={:.2}", v); }
                             Some(Command::SetPosKp(v)) => { ctrl.pos_kp = v; info!("PKP={:.2}", v); }
+                            Some(Command::SetPosKd(v)) => { ctrl.pos_kd = v; info!("PKD={:.2}", v); }
                             Some(Command::SetYawKp(v)) => { ctrl.yaw_kp = v; info!("YKP={:.2}", v); }
                             Some(Command::SetPitchBias(v)) => { ctrl.pitch_bias = v; info!("PBIAS={:.2}", v); }
                             Some(Command::SetVelIntLimit(v)) => { ctrl.vel_integral_limit = v; info!("VILIM={:.2}", v); }
