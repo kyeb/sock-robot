@@ -50,7 +50,7 @@ impl BalanceController {
             vel_kp: 0.5,
             vel_ki: 0.2,
             vel_integral: 0.0,
-            vel_integral_limit: 2.0,
+            vel_integral_limit: 4.0,
 
             pos_kp: 0.3,
             home_pos: 0.0,
@@ -103,13 +103,15 @@ impl BalanceController {
             let pos_error = self.home_pos - state.wheel_pos;
             self.pos_correction = self.pos_kp * pos_error;
 
-            // Velocity loop: error includes position correction
-            let target_vel = reference.target_vel + self.pos_correction;
-            let vel_error = target_vel - state.wheel_vel;
-            self.vel_integral += vel_error * outer_dt;
+            // Velocity loop: P sees full error (including position correction),
+            // but integrator only tracks the base velocity error (excluding position
+            // correction) so position hold doesn't wind up the integrator.
+            let base_vel_error = reference.target_vel - state.wheel_vel;
+            let full_vel_error = base_vel_error + self.pos_correction;
+            self.vel_integral += base_vel_error * outer_dt;
             self.vel_integral = self.vel_integral.clamp(-self.vel_integral_limit, self.vel_integral_limit);
 
-            self.outer_p = self.vel_kp * vel_error;
+            self.outer_p = self.vel_kp * full_vel_error;
             self.outer_i = self.vel_ki * self.vel_integral;
             self.target_pitch = (self.outer_p + self.outer_i).clamp(-15.0, 15.0);
         }
