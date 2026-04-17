@@ -47,21 +47,21 @@ pub struct BalanceController {
 impl BalanceController {
     pub fn new() -> Self {
         Self {
-            angle_kp: 15.0,
-            angle_kd: 0.35,
+            angle_kp: 10.0,
+            angle_kd: 0.4,
 
-            vel_kp: 0.5,
-            vel_ki: 0.2,
-            vel_kd: 0.02,
+            vel_kp: 0.05,
+            vel_ki: 0.0,
+            vel_kd: 0.0,
             vel_integral: 0.0,
             vel_integral_limit: 4.0,
             prev_vel_error: 0.0,
 
             pos_kp: 0.3,
-            pos_kd: 0.02,
+            pos_kd: 0.2,
             home_pos: 0.0,
 
-            yaw_kp: 1.0,
+            yaw_kp: 0.5,
             home_yaw: 0.0,
 
             // Tuned by iterating: set PBIAS at runtime, toggle PID off/on with

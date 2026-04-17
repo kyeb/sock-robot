@@ -10,7 +10,6 @@ Usage: scripts/cmd.py PID_ON
        scripts/cmd.py STOP
        scripts/cmd.py stats [seconds]     # default 10s
        scripts/cmd.py watch [seconds]     # live 1Hz samples
-       scripts/cmd.py diagnose [seconds]  # full diagnostic report
        scripts/cmd.py gains               # show current gains from telemetry
        scripts/cmd.py pidrun              # analyze most recent PID-on run in log
 """
@@ -112,132 +111,6 @@ def find_zero_crossings(values, timestamps_ms):
     period_s = half_period_ms * 2 / 1000
     freq_hz = 1 / period_s if period_s > 0 else 0
     return period_s, freq_hz
-
-
-def cmd_diagnose(seconds):
-    log = latest_log()
-    if not log:
-        print("No log files found in data/")
-        return
-
-    samples = []
-    with open(log) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = json.loads(line)
-                if d.get("pid_on"):
-                    samples.append(d)
-            except json.JSONDecodeError:
-                continue
-
-    if samples:
-        t_end = samples[-1]["t"]
-        t_start = t_end - seconds * 1000
-        samples = [s for s in samples if s["t"] >= t_start]
-
-    if len(samples) < 10:
-        print(f"Not enough PID-on samples (got {len(samples)}, need 10+)")
-        return
-
-    dt_s = (samples[-1]["t"] - samples[0]["t"]) / 1000
-    print(f"=== DIAGNOSTIC REPORT ({len(samples)} samples, {dt_s:.1f}s) ===\n")
-
-    # --- Basic stats ---
-    def stat(arr):
-        m = sum(arr) / len(arr)
-        std = math.sqrt(sum((x - m) ** 2 for x in arr) / len(arr))
-        return m, std, min(arr), max(arr)
-
-    pitches = [d["pitch"] for d in samples]
-    vels = [(d["v1"] + d["v2"]) / 2 for d in samples]
-    efforts = [d["pid"] for d in samples]
-    tps = [d["tp"] for d in samples]
-    ois = [d["i"] for d in samples]
-    ops = [d["op"] for d in samples]
-    ts = [d["t"] for d in samples]
-
-    pm, ps, plo, phi = stat(pitches)
-    vm, vs, vlo, vhi = stat(vels)
-    em, es, elo, ehi = stat(efforts)
-    tpm, tps_std, tplo, tphi = stat(tps)
-    oim, ois_std, oilo, oihi = stat(ois)
-
-    print("  SIGNALS:")
-    print(f"    pitch:        mean={pm:+.2f}  std={ps:.3f}  range=[{plo:+.1f}, {phi:+.1f}]")
-    print(f"    target_pitch: mean={tpm:+.2f}  std={tps_std:.3f}  range=[{tplo:+.2f}, {tphi:+.2f}]")
-    print(f"    velocity:     mean={vm:+.2f}  std={vs:.2f}  range=[{vlo:+.1f}, {vhi:+.1f}]")
-    print(f"    effort:       mean={em:+.2f}  std={es:.2f}  range=[{elo:+.1f}, {ehi:+.1f}]")
-    print(f"    outer_i:      mean={oim:+.2f}  std={ois_std:.3f}  range=[{oilo:+.2f}, {oihi:+.2f}]")
-
-    # --- Sway analysis (low-freq oscillation in target_pitch) ---
-    print("\n  SWAY ANALYSIS (low-freq oscillation):")
-    # de-mean target_pitch and look for zero crossings
-    tp_centered = [tp - tpm for tp in tps]
-    period, freq = find_zero_crossings(tp_centered, ts)
-    if period:
-        print(f"    target_pitch oscillation: period={period:.2f}s ({freq:.2f}Hz)")
-        print(f"    target_pitch pk-pk: {tphi - tplo:.3f} deg")
-    else:
-        print(f"    no clear oscillation detected in target_pitch")
-
-    # sway in position (wheel_pos in radians from telemetry)
-    e1s = [d["e1"] for d in samples]
-    e2s = [d["e2"] for d in samples]
-    wps = [d.get("wp", 0) for d in samples]
-    if wps and any(wp != 0 for wp in wps):
-        wpm, wps_std, wplo, wphi = stat(wps)
-        # 80mm diameter Pololu wheel, radius = 40mm
-        wheel_r = 0.04
-        pos_range_m = (wphi - wplo) * wheel_r
-        pos_range_in = pos_range_m * 39.37
-        print(f"    wheel_pos range: [{wplo:+.2f}, {wphi:+.2f}] rad  (~{pos_range_in:.1f} inches pk-pk)")
-        # zero-crossing analysis on de-meaned wheel_pos
-        wp_centered = [wp - wpm for wp in wps]
-        wp_period, wp_freq = find_zero_crossings(wp_centered, ts)
-        if wp_period:
-            print(f"    position oscillation: period={wp_period:.2f}s ({wp_freq:.2f}Hz)")
-    else:
-        avg_enc = [(e1 + e2) / 2 for e1, e2 in zip(e1s, e2s)]
-        enc_drift = avg_enc[-1] - avg_enc[0]
-        enc_drift_per_s = enc_drift / dt_s if dt_s > 0 else 0
-        print(f"    encoder drift: {enc_drift:+.0f} counts ({enc_drift_per_s:+.1f}/s)")
-
-    # --- Vibration analysis (high-freq pitch variation) ---
-    print("\n  VIBRATION ANALYSIS (high-freq noise):")
-    # compute pitch rate of change from consecutive samples
-    pitch_deltas = []
-    for i in range(1, len(pitches)):
-        dt_ms = ts[i] - ts[i - 1]
-        if dt_ms > 0:
-            pitch_deltas.append(abs(pitches[i] - pitches[i - 1]) / (dt_ms / 1000))
-    if pitch_deltas:
-        pdm, pds, pdlo, pdhi = stat(pitch_deltas)
-        print(f"    pitch rate of change: mean={pdm:.1f} deg/s  max={pdhi:.1f} deg/s")
-
-    effort_deltas = []
-    for i in range(1, len(efforts)):
-        effort_deltas.append(abs(efforts[i] - efforts[i - 1]))
-    if effort_deltas:
-        edm, eds, edlo, edhi = stat(effort_deltas)
-        print(f"    effort jitter: mean={edm:.1f}  max={edhi:.1f}  (step-to-step delta)")
-
-    # --- Yaw analysis ---
-    print("\n  YAW ANALYSIS:")
-    yaw_drift = e1s[-1] - e1s[0] - (e2s[-1] - e2s[0])
-    yaw_drift_per_s = yaw_drift / dt_s if dt_s > 0 else 0
-    print(f"    encoder divergence (e1-e2 drift): {yaw_drift:+.0f} counts ({yaw_drift_per_s:+.1f}/s)")
-    yaw_rates = [d["yr"] for d in samples]
-    yrm, yrs, yrlo, yrhi = stat(yaw_rates)
-    print(f"    gyro yaw rate: mean={yrm:+.2f} deg/s  std={yrs:.2f}")
-
-    # --- Integrator health ---
-    print("\n  INTEGRATOR HEALTH:")
-    oi_at_limit = sum(1 for oi in ois if abs(oi) > 1.8) / len(ois) * 100
-    print(f"    outer_i near limit (>1.8): {oi_at_limit:.1f}% of samples")
-    print(f"    outer_i range: [{oilo:+.3f}, {oihi:+.3f}]")
 
 
 def cmd_gains():
@@ -404,6 +277,44 @@ def cmd_pidrun(last_seconds: float | None = None):
     wps = [s["wp"] for s in run]
     print(f"wheel_pos drift: [{min(wps):.2f}, {max(wps):.2f}]  span={max(wps)-min(wps):.2f} rad")
 
+    # Per-window amplitude envelope (is the oscillation growing?)
+    win_s = 5.0
+    win_ms = win_s * 1000
+    t0 = run[0]["t"]
+    buckets: list[list[dict]] = [[]]
+    wstart = t0
+    for s in run:
+        if s["t"] - wstart > win_ms:
+            buckets.append([])
+            wstart = s["t"]
+        buckets[-1].append(s)
+    print(f"\nper-{win_s:.0f}s envelope (is amplitude growing?):")
+    print(f"  {'t(s)':>6}  {'wp_pkpk':>8}  {'pitch_pkpk':>10}  {'fast_std':>8}  {'wp_mean':>8}")
+    for w in buckets:
+        if len(w) < 2:
+            continue
+        t = (w[0]["t"] - t0) / 1000
+        wps_w = [s["wp"] for s in w]
+        pit_w = [s["pitch"] for s in w]
+        pm_w = sum(pit_w) / len(pit_w)
+        # fast component: deviation from 1s moving mean
+        wsize_inner = max(1, int(len(w) / max((w[-1]["t"] - w[0]["t"]) / 1000, 1e-3)))
+        slow_w = []
+        tot = 0.0
+        q: list[float] = []
+        for p in pit_w:
+            q.append(p)
+            tot += p
+            if len(q) > wsize_inner:
+                tot -= q.pop(0)
+            slow_w.append(tot / len(q))
+        fast_w = [pit_w[i] - slow_w[i] for i in range(len(pit_w))]
+        fast_std_w = statistics.stdev(fast_w) if len(fast_w) > 1 else 0
+        print(
+            f"  {t:>6.1f}  {max(wps_w)-min(wps_w):>8.2f}  "
+            f"{max(pit_w)-min(pit_w):>10.2f}  {fast_std_w:>8.3f}  {sum(wps_w)/len(wps_w):>8.2f}"
+        )
+
 
 async def cmd_send(msg):
     async with websockets.connect(WS_URL) as ws:
@@ -424,9 +335,6 @@ def main():
     elif cmd == "watch":
         seconds = float(sys.argv[2]) if len(sys.argv) > 2 else 30
         cmd_watch(seconds)
-    elif cmd == "diagnose":
-        seconds = float(sys.argv[2]) if len(sys.argv) > 2 else 10
-        cmd_diagnose(seconds)
     elif cmd == "gains":
         cmd_gains()
     elif cmd == "pidrun":

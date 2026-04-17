@@ -44,19 +44,19 @@ function ParamRow({ label, value, step, min, max, precision, onChange, disabled 
 export function PidTuner({ sendCommand, connected }: PidTunerProps) {
   // Inner loop (angle)
   const [kp, setKp] = useState(10.0)
-  const [kd, setKd] = useState(0.5)
+  const [kd, setKd] = useState(0.4)
   // Outer loop (velocity)
-  const [vkp, setVkp] = useState(0.25)
+  const [vkp, setVkp] = useState(0.05)
   const [vki, setVki] = useState(0.0)
   const [vkd, setVkd] = useState(0.0)
   const [vilim, setVilim] = useState(4.0)
   // Position hold
-  const [pkp, setPkp] = useState(0.5)
-  const [pkd, setPkd] = useState(0.4)
+  const [pkp, setPkp] = useState(0.3)
+  const [pkd, setPkd] = useState(0.2)
   // Yaw correction
   const [ykp, setYkp] = useState(0.5)
   // Bias / target
-  const [pbias, setPbias] = useState(1.25)
+  const [pbias, setPbias] = useState(1.35)
   const [tvel, setTvel] = useState(0.0)
   const [tyaw, setTyaw] = useState(0.0)
   const [enabled, setEnabled] = useState(false)
@@ -164,7 +164,7 @@ export function PidTuner({ sendCommand, connected }: PidTunerProps) {
           disabled={!connected} onChange={(v) => updateParam('PKD', v, setPkd)} />
         <ParamRow label="YKP" value={ykp} step={0.2} min={0} max={10} precision={2}
           disabled={!connected} onChange={(v) => updateParam('YKP', v, setYkp)} />
-        <ParamRow label="PBIAS" value={pbias} step={0.1} min={-5} max={5} precision={2}
+        <ParamRow label="PBIAS" value={pbias} step={0.01} min={-5} max={5} precision={2}
           disabled={!connected} onChange={(v) => updateParam('PBIAS', v, setPbias)} />
         <ParamRow label="TVEL" value={tvel} step={0.5} min={-5} max={5} precision={2}
           disabled={!connected} onChange={(v) => updateParam('TVEL', v, setTvel)} />
