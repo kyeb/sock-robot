@@ -44,6 +44,9 @@ export const COL = {
 
 export const NUM_COLUMNS = 17
 
+export const MAX_WINDOW_SECONDS = 60
+export const TELEMETRY_HZ = 50
+
 export const TAB_COLUMNS: Record<Exclude<ChartTab, 'all'>, number[]> = {
   accel: [COL.T, COL.AX, COL.AY, COL.AZ],
   gyro: [COL.T, COL.GX, COL.GY, COL.GZ],

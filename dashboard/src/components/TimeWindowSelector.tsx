@@ -1,9 +1,11 @@
+import { MAX_WINDOW_SECONDS } from '~/lib/types'
+
 interface TimeWindowSelectorProps {
   value: number
   onChange: (seconds: number) => void
 }
 
-const OPTIONS = [5, 10, 30, 60]
+const OPTIONS = [5, 10, 30, MAX_WINDOW_SECONDS]
 
 export function TimeWindowSelector({ value, onChange }: TimeWindowSelectorProps) {
   return (
