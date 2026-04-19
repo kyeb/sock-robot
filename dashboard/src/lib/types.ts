@@ -27,6 +27,7 @@ export interface IMUSample {
 }
 
 export type ChartTab = 'all' | 'accel' | 'gyro' | 'orientation' | 'encoders' | 'control'
+export type ViewTab = ChartTab | 'drive'
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected'
 

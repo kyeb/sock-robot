@@ -48,6 +48,7 @@ export function Tuner({ sendCommand, connected }: TunerProps) {
   const [k2, setK2] = useState(0.8)
   const [k3, setK3] = useState(0.3)
   const [k4, setK4] = useState(8.7)
+  const [k5, setK5] = useState(0.5)
   const [kyaw, setKyaw] = useState(0.5)
   // Equilibrium angle (measured from fit_eq.py) / targets
   const [theq, setTheq] = useState(1.22)
@@ -55,11 +56,15 @@ export function Tuner({ sendCommand, connected }: TunerProps) {
   const [tyaw, setTyaw] = useState(0.0)
   const [enabled, setEnabled] = useState(false)
   const [capturing, setCapturing] = useState(false)
+  const [logFast, setLogFast] = useState(false)
+  const [prbs, setPrbs] = useState(false)
 
   useEffect(() => {
     if (!connected) {
       setEnabled(false)
       setCapturing(false)
+      setLogFast(false)
+      setPrbs(false)
     }
   }, [connected])
 
@@ -81,6 +86,7 @@ export function Tuner({ sendCommand, connected }: TunerProps) {
       sendCommand(`K2 ${k2}`)
       sendCommand(`K3 ${k3}`)
       sendCommand(`K4 ${k4}`)
+      sendCommand(`K5 ${k5}`)
       sendCommand(`KYAW ${kyaw}`)
       sendCommand(`THEQ ${theq}`)
       sendCommand(`TVEL ${tvel}`)
@@ -88,7 +94,7 @@ export function Tuner({ sendCommand, connected }: TunerProps) {
       sendCommand('ENABLE')
       setEnabled(true)
     }
-  }, [enabled, k1, k2, k3, k4, kyaw, theq, tvel, tyaw, sendCommand])
+  }, [enabled, k1, k2, k3, k4, k5, kyaw, theq, tvel, tyaw, sendCommand])
 
   const toggleCapture = useCallback(() => {
     if (capturing) {
@@ -100,6 +106,27 @@ export function Tuner({ sendCommand, connected }: TunerProps) {
     }
   }, [capturing, sendCommand])
 
+  const toggleLogFast = useCallback(() => {
+    if (logFast) {
+      sendCommand('LOG_SLOW')
+      setLogFast(false)
+    } else {
+      sendCommand('LOG_FAST')
+      setLogFast(true)
+      setTimeout(() => setLogFast(false), 10000)
+    }
+  }, [logFast, sendCommand])
+
+  const togglePrbs = useCallback(() => {
+    if (prbs) {
+      sendCommand('PRBS_OFF')
+      setPrbs(false)
+    } else {
+      sendCommand('PRBS_ON')
+      setPrbs(true)
+    }
+  }, [prbs, sendCommand])
+
   return (
     <div className="border border-[#181818] p-3 flex flex-col gap-2">
       <div className="flex items-center justify-between">
@@ -107,6 +134,32 @@ export function Tuner({ sendCommand, connected }: TunerProps) {
           lqr controller
         </span>
         <div className="flex gap-2">
+        <button
+          className={`px-2 py-2 text-[10px] tracking-widest uppercase border font-bold text-center ${
+            !connected
+              ? 'opacity-30 pointer-events-none bg-[#1a1a24] border-[#333] text-[#666]'
+              : prbs
+                ? 'bg-[#1a1a20] border-[#ff8800] text-[#ff8800]'
+                : 'bg-[#1a1a24] border-[#333] text-[#666] hover:text-[#c0c0c0] hover:border-[#555]'
+          }`}
+          disabled={!connected}
+          onClick={togglePrbs}
+        >
+          {prbs ? 'PRBS' : 'PRBS'}
+        </button>
+        <button
+          className={`px-2 py-2 text-[10px] tracking-widest uppercase border font-bold text-center ${
+            !connected
+              ? 'opacity-30 pointer-events-none bg-[#1a1a24] border-[#333] text-[#666]'
+              : logFast
+                ? 'bg-[#001122] border-[#00aaff] text-[#00aaff] animate-pulse'
+                : 'bg-[#1a1a24] border-[#333] text-[#666] hover:text-[#c0c0c0] hover:border-[#555]'
+          }`}
+          disabled={!connected}
+          onClick={toggleLogFast}
+        >
+          {logFast ? '200Hz' : '200Hz'}
+        </button>
         <button
           className={`w-24 py-2 text-sm tracking-widest uppercase border font-bold text-center ${
             !connected
@@ -144,6 +197,8 @@ export function Tuner({ sendCommand, connected }: TunerProps) {
           disabled={!connected} onChange={(v) => updateParam('K3', v, setK3)} />
         <ParamRow label="K4" value={k4} step={0.1} min={0} max={20} precision={2}
           disabled={!connected} onChange={(v) => updateParam('K4', v, setK4)} />
+        <ParamRow label="K5" value={k5} step={0.02} min={0} max={10} precision={2}
+          disabled={!connected} onChange={(v) => updateParam('K5', v, setK5)} />
         <ParamRow label="KYAW" value={kyaw} step={0.2} min={0} max={10} precision={2}
           disabled={!connected} onChange={(v) => updateParam('KYAW', v, setKyaw)} />
         <ParamRow label="THEQ" value={theq} step={0.01} min={-5} max={5} precision={2}

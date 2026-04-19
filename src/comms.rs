@@ -23,6 +23,18 @@ pub fn parse_command(line: &str) -> Option<Command> {
     if line.eq_ignore_ascii_case("DISABLE") {
         return Some(Command::Disable);
     }
+    if line.eq_ignore_ascii_case("LOG_FAST") {
+        return Some(Command::LogFast);
+    }
+    if line.eq_ignore_ascii_case("LOG_SLOW") {
+        return Some(Command::LogSlow);
+    }
+    if line.eq_ignore_ascii_case("PRBS_ON") {
+        return Some(Command::PrbsOn);
+    }
+    if line.eq_ignore_ascii_case("PRBS_OFF") {
+        return Some(Command::PrbsOff);
+    }
     // Multi-arg: EFFORT L R or EFFORT V (V applied to both)
     let ws_parts: Vec<&str> = line.split_whitespace().collect();
     if ws_parts.len() >= 2 && ws_parts[0].eq_ignore_ascii_case("EFFORT") {
@@ -58,6 +70,7 @@ pub fn parse_command(line: &str) -> Option<Command> {
         "K3" => Some(Command::SetKPos(val.clamp(0.0, 30.0))),
         "K4" => Some(Command::SetKVel(val.clamp(0.0, 20.0))),
         "KYAW" => Some(Command::SetKYaw(val.clamp(0.0, 10.0))),
+        "K5" => Some(Command::SetKPosInt(val.clamp(0.0, 10.0))),
         "THEQ" => Some(Command::SetThetaEq(val.clamp(-5.0, 5.0))),
         "TVEL" => Some(Command::SetTargetVel(val.clamp(-5.0, 5.0))),
         "TYAW" => Some(Command::SetTargetYawRate(val.clamp(-5.0, 5.0))),
@@ -156,6 +169,7 @@ pub fn emit_telemetry(
         .flt("ur", ctrl.u_pitch_rate, 2)
         .flt("ux", ctrl.u_pos, 2)
         .flt("uv", ctrl.u_vel, 2)
+        .flt("ui", ctrl.u_pos_int, 2)
         .flt("uy", ctrl.u_yaw, 2)
         .flag("ctrl_on", ctrl.enabled)
         .num("e1", snap.enc1)

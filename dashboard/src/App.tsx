@@ -3,25 +3,26 @@ import { useIMUSocket } from '~/hooks/useIMUSocket'
 import { Chart } from '~/components/Chart'
 import { CurrentValues } from '~/components/CurrentValues'
 import { Tuner } from '~/components/Tuner'
+import { Drive } from '~/components/Drive'
 import { TabBar } from '~/components/TabBar'
 import { StatusBar } from '~/components/StatusBar'
 import { TimeWindowSelector } from '~/components/TimeWindowSelector'
-import type { ChartTab } from '~/lib/types'
+import type { ViewTab } from '~/lib/types'
 
-const VALID_TABS = new Set<string>(['all', 'accel', 'gyro', 'orientation', 'encoders', 'control'])
+const VALID_TABS = new Set<string>(['all', 'accel', 'gyro', 'orientation', 'encoders', 'control', 'drive'])
 
-function getTabFromURL(): ChartTab {
+function getTabFromURL(): ViewTab {
   const params = new URLSearchParams(window.location.search)
   const tab = params.get('tab')
-  return tab && VALID_TABS.has(tab) ? (tab as ChartTab) : 'all'
+  return tab && VALID_TABS.has(tab) ? (tab as ViewTab) : 'all'
 }
 
 export function App() {
   const { dataRef, latest, status, sampleCount, hz, sendCommand } = useIMUSocket()
-  const [tab, setTabState] = useState<ChartTab>(getTabFromURL)
+  const [tab, setTabState] = useState<ViewTab>(getTabFromURL)
   const [timeWindow, setTimeWindow] = useState(10)
 
-  const setTab = useCallback((t: ChartTab) => {
+  const setTab = useCallback((t: ViewTab) => {
     setTabState(t)
     const url = new URL(window.location.href)
     if (t === 'all') {
@@ -51,8 +52,10 @@ export function App() {
       {/* Tab bar */}
       <TabBar active={tab} onChange={setTab} />
 
-      {/* Charts */}
-      {tab === 'all' ? (
+      {/* Charts or drive view */}
+      {tab === 'drive' ? (
+        <Drive sendCommand={sendCommand} connected={status === 'connected'} />
+      ) : tab === 'all' ? (
         <div className="flex-1 min-h-0 flex flex-col gap-2">
           <div className="flex-1 min-h-0 relative">
             <Chart dataRef={dataRef} tab="accel" timeWindow={timeWindow} visible />

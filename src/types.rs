@@ -45,5 +45,10 @@ pub enum Command {
     SetKPos(f32),
     SetKVel(f32),
     SetKYaw(f32),
+    SetKPosInt(f32),
     SetThetaEq(f32),
+    LogFast,
+    LogSlow,
+    PrbsOn,
+    PrbsOff,
 }

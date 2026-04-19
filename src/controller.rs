@@ -12,6 +12,7 @@ pub struct Controller {
 
     // Yaw: separate decoupled SISO P loop on encoder-derived heading
     pub k_yaw: f32,
+    pub k_pos_int: f32, // K5: gain on integrated position error
 
     // Equilibrium pitch angle (deg). Subtracted so x_pitch=0 at true balance.
     pub theta_eq: f32,
@@ -19,12 +20,14 @@ pub struct Controller {
     pub enabled: bool,
     home_pos: f32,
     home_yaw: f32,
+    pos_integral: f32,
 
     // Per-term effort contributions (telemetry only)
     pub u_pitch: f32,
     pub u_pitch_rate: f32,
     pub u_pos: f32,
     pub u_vel: f32,
+    pub u_pos_int: f32,
     pub u_yaw: f32,
     pub effort: f32,
 }
@@ -37,14 +40,17 @@ impl Controller {
             k_pos: 0.3,
             k_vel: 8.7,
             k_yaw: 0.5,
+            k_pos_int: 0.5,
             theta_eq: 1.22,
             enabled: false,
             home_pos: 0.0,
             home_yaw: 0.0,
+            pos_integral: 0.0,
             u_pitch: 0.0,
             u_pitch_rate: 0.0,
             u_pos: 0.0,
             u_vel: 0.0,
+            u_pos_int: 0.0,
             u_yaw: 0.0,
             effort: 0.0,
         }
@@ -96,9 +102,17 @@ impl Controller {
         self.u_pitch_rate = self.k_pitch_rate * x_pitch_rate;
         self.u_pos = self.k_pos * x_pos;
         self.u_vel = self.k_vel * x_vel;
+        self.u_pos_int = self.k_pos_int * self.pos_integral;
 
-        self.effort =
-            (self.u_pitch + self.u_pitch_rate + self.u_pos + self.u_vel).clamp(-100.0, 100.0);
+        let u_total = self.u_pitch + self.u_pitch_rate + self.u_pos + self.u_vel + self.u_pos_int;
+
+        // Conditional integration: only integrate when not saturated,
+        // or when the error would reduce saturation.
+        if u_total.abs() < 100.0 || (u_total.signum() != x_pos.signum()) {
+            self.pos_integral += x_pos * state.dt;
+        }
+
+        self.effort = u_total.clamp(-100.0, 100.0);
 
         let yaw_error = state.yaw_pos - self.home_yaw;
         self.u_yaw = (self.k_yaw * yaw_error).clamp(-10.0, 10.0);
@@ -115,10 +129,12 @@ impl Controller {
     }
 
     pub fn reset(&mut self) {
+        self.pos_integral = 0.0;
         self.u_pitch = 0.0;
         self.u_pitch_rate = 0.0;
         self.u_pos = 0.0;
         self.u_vel = 0.0;
+        self.u_pos_int = 0.0;
         self.u_yaw = 0.0;
         self.effort = 0.0;
     }

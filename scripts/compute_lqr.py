@@ -133,6 +133,8 @@ def main():
     ap.add_argument("--q-pitch-rate", type=float, default=1.0)
     ap.add_argument("--q-vel", type=float, default=1.0)
     ap.add_argument("--q-pos", type=float, default=10.0)
+    ap.add_argument("--q-pos-int", type=float, default=5.0,
+                    help="Q weight on integrated position error")
     ap.add_argument("--r", type=float, default=1.0, help="control effort cost")
     args = ap.parse_args()
 
@@ -141,54 +143,58 @@ def main():
 
     Ad, Bd = discretize(A, B, args.dt)
 
-    Q = np.diag([args.q_pitch, args.q_pitch_rate, args.q_vel, args.q_pos])
+    # Augment with position integrator (5th state = ∫wheel_pos_error·dt)
+    # The integrator state evolves as: x5[k+1] = x5[k] + dt * x_pos[k]
+    # x_pos is state index 3 (wheel_pos)
+    A5 = np.block([
+        [Ad,                          np.zeros((4, 1))],
+        [args.dt * np.array([[0, 0, 0, 1]]),  np.array([[1.0]])],
+    ])
+    B5 = np.vstack([Bd, np.zeros((1, 1))])
+
+    Q5 = np.diag([args.q_pitch, args.q_pitch_rate, args.q_vel,
+                   args.q_pos, args.q_pos_int])
     R = np.array([[args.r]])
 
-    print(f"\nQ = diag({np.diag(Q).tolist()})")
+    print(f"\nQ = diag({np.diag(Q5).tolist()})")
     print(f"R = {R[0,0]}")
 
-    K, cl_eigs = compute_lqr(Ad, Bd, Q, R)
-    K_si = K[0]
+    K5, cl_eigs = compute_lqr(A5, B5, Q5, R)
+    K_si = K5[0]
 
-    print(f"\nLQR gain K (SI: rad, rad/s, N·m):")
+    print(f"\nLQR gain K (SI: rad, rad/s, N·m) — 5-state with integrator:")
     print(f"  K_pitch      = {K_si[0]:+.6f}  N·m/rad")
     print(f"  K_pitch_rate = {K_si[1]:+.6f}  N·m/(rad/s)")
     print(f"  K_vel        = {K_si[2]:+.6f}  N·m/(rad/s)")
     print(f"  K_pos        = {K_si[3]:+.6f}  N·m/rad")
+    print(f"  K_pos_int    = {K_si[4]:+.6f}  N·m/(rad·s)")
 
     print(f"\nClosed-loop eigenvalues: {', '.join(f'{e:.4f}' for e in cl_eigs)}")
     print(f"  All |λ| < 1: {all(abs(e) < 1 for e in cl_eigs)}")
 
-    # Motor torque estimation.
-    # From the unloaded motor ID: τ_m·v̇ + v = K_m·u
-    # The motor model is J·v̇ = T - b·v, so K_m = (torque_const)/b, τ_m = J/b.
-    # At zero speed: T = b · K_m · u = (J/τ_m) · K_m · u
-    # But J is the UNLOADED wheel+rotor inertia, which we don't know precisely.
-    # Instead, we treat torque_per_pct as a tunable parameter.
+    # Continuous-time equivalent poles for intuition
+    print(f"  Continuous-time equivalents (log(λ)/dt):")
+    for e in sorted(cl_eigs, key=lambda x: -abs(x)):
+        if abs(e) > 1e-10:
+            s = np.log(complex(e)) / args.dt
+            print(f"    {s.real:+.1f} {'± ' + f'{abs(s.imag):.1f}j' if abs(s.imag) > 0.1 else ''}"
+                  f"  ({abs(s):.1f} rad/s)")
+
     if args.torque_per_pct is not None:
         tau_pp = args.torque_per_pct
         print(f"\nUsing specified torque_per_pct = {tau_pp:.4f} N·m/%")
     else:
-        # Rough estimate: at the balancing operating point (low speed),
-        # the motor can deliver close to its stall torque.
-        # For Pololu 37D 50:1 12V: stall torque ~0.5 N·m per motor, ~1.0 total.
-        # But actual operating torque is lower due to back-EMF at nonzero speed.
-        # Use 50% of estimated stall as a middle ground.
-        # stall_torque ≈ (no_load_speed / K_m) * motor_damping ... hard to pin down.
-        # Default to a conservative estimate; user should tune this.
-        tau_pp = 0.005  # 0.5 N·m at 100% → 0.005 N·m per %
+        tau_pp = 0.005
         print(f"\nUsing default torque_per_pct = {tau_pp:.4f} N·m/% (tune with --torque-per-pct)")
 
     deg2rad = np.pi / 180.0
 
-    # Firmware: effort = +k · x_fw (no negation)
-    # LQR: u = -K · x_si
-    # So k_fw = -K_si (converted to firmware units)
     k_fw = np.array([
         -K_si[0] * deg2rad / tau_pp,
         -K_si[1] * deg2rad / tau_pp,
         -K_si[2] / tau_pp,
         -K_si[3] / tau_pp,
+        -K_si[4] / tau_pp,
     ])
 
     print(f"\n{'='*60}")
@@ -197,12 +203,14 @@ def main():
     print(f"  k_pitch_rate (K2) = {k_fw[1]:+.4f}  effort%/(deg/s)")
     print(f"  k_vel        (K4) = {k_fw[2]:+.4f}  effort%/(rad/s)")
     print(f"  k_pos        (K3) = {k_fw[3]:+.4f}  effort%/rad")
+    print(f"  k_pos_int    (K5) = {k_fw[4]:+.4f}  effort%/(rad·s)")
     print(f"{'='*60}")
 
     print(f"\nAt 5° tilt (other states=0): effort = {k_fw[0]*5:.1f}%")
     print(f"At 10° tilt: effort = {k_fw[0]*10:.1f}%")
     print(f"At 1 rad/s wheel vel: effort = {k_fw[2]*1:.1f}%")
     print(f"At 1 rad wheel pos:   effort = {k_fw[3]*1:.1f}%")
+    print(f"At 1 rad·s integrated pos error: effort = {k_fw[4]*1:.1f}%")
 
     if any(k < 0 for k in k_fw):
         print(f"\nWARNING: negative gains detected — sign convention may be wrong!")

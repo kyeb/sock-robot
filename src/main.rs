@@ -96,7 +96,7 @@ fn main() {
         enabled: false,
     };
 
-    info!("sock-robot ready. Commands: STOP, ENABLE, DISABLE, K1/K2/K3/K4/KYAW/THEQ/TVEL/TYAW/EFFORT <val>");
+    info!("sock-robot ready. Commands: STOP, ENABLE, DISABLE, K1/K2/K3/K4/KYAW/THEQ/TVEL/TYAW/EFFORT <val>, LOG_FAST, LOG_SLOW, PRBS_ON, PRBS_OFF");
 
     let mut buf = [0u8; 128];
     let mut pos = 0usize;
@@ -111,6 +111,18 @@ fn main() {
     let mut manual_effort: Option<(f32, f32)> = None;
     let mut manual_effort_ms: u32 = 0;
     const MANUAL_EFFORT_TIMEOUT_MS: u32 = 500;
+
+    // LOG_FAST: emit telemetry every control tick (200 Hz) instead of 50 Hz.
+    // Auto-reverts to 50 Hz after LOG_FAST_DURATION_MS.
+    let mut log_fast = false;
+    let mut log_fast_start_ms: u32 = 0;
+    const LOG_FAST_DURATION_MS: u32 = 10_000;
+
+    // PRBS: inject small pseudo-random effort for sysid excitation.
+    // Uses a 15-bit LFSR (maximal length 32767) toggling ±PRBS_AMP every tick.
+    let mut prbs_on = false;
+    let mut prbs_lfsr: u16 = 0xACE1;
+    const PRBS_AMP: f32 = 8.0;
 
     loop {
         // Handle serial commands (non-blocking)
@@ -133,8 +145,8 @@ fn main() {
                                 ctrl.set_home(estimator.wheel_pos(), estimator.yaw_pos());
                                 ctrl.enabled = true;
                                 reference.enabled = true;
-                                info!("CTRL ON: k1={:.2} k2={:.2} k3={:.2} k4={:.2} kyaw={:.2} theq={:.2}",
-                                    ctrl.k_pitch, ctrl.k_pitch_rate, ctrl.k_pos, ctrl.k_vel, ctrl.k_yaw, ctrl.theta_eq);
+                                info!("CTRL ON: k1={:.2} k2={:.2} k3={:.2} k4={:.2} k5={:.2} kyaw={:.2} theq={:.2}",
+                                    ctrl.k_pitch, ctrl.k_pitch_rate, ctrl.k_pos, ctrl.k_vel, ctrl.k_pos_int, ctrl.k_yaw, ctrl.theta_eq);
                             }
                             Some(Command::Disable) => {
                                 ctrl.enabled = false;
@@ -173,6 +185,10 @@ fn main() {
                                 ctrl.k_yaw = v;
                                 info!("KYAW={:.2}", v);
                             }
+                            Some(Command::SetKPosInt(v)) => {
+                                ctrl.k_pos_int = v;
+                                info!("K5={:.2}", v);
+                            }
                             Some(Command::SetThetaEq(v)) => {
                                 ctrl.theta_eq = v;
                                 info!("THEQ={:.2}", v);
@@ -184,6 +200,23 @@ fn main() {
                             Some(Command::SetTargetYawRate(v)) => {
                                 reference.target_yaw_rate = v;
                                 info!("TYAW={:.2}", v);
+                            }
+                            Some(Command::LogFast) => {
+                                log_fast = true;
+                                log_fast_start_ms = millis();
+                                info!("LOG_FAST on (200Hz for {}s)", LOG_FAST_DURATION_MS / 1000);
+                            }
+                            Some(Command::LogSlow) => {
+                                log_fast = false;
+                                info!("LOG_SLOW (50Hz)");
+                            }
+                            Some(Command::PrbsOn) => {
+                                prbs_on = true;
+                                info!("PRBS on (±{:.0}%)", PRBS_AMP);
+                            }
+                            Some(Command::PrbsOff) => {
+                                prbs_on = false;
+                                info!("PRBS off");
                             }
                             None => {
                                 info!("ERR: unknown: {line}");
@@ -230,7 +263,7 @@ fn main() {
                     info!("EFFORT timeout → stop");
                 }
 
-                let cmd = if !ctrl.enabled {
+                let mut cmd = if !ctrl.enabled {
                     if let Some((l, r)) = manual_effort {
                         MotorCommand { left: l, right: r }
                     } else {
@@ -240,6 +273,17 @@ fn main() {
                     ctrl.update(&state, &reference)
                 };
 
+                // PRBS excitation: inject ±PRBS_AMP to both wheels (same sign
+                // so it doesn't induce yaw, only forward/back perturbation).
+                if prbs_on && ctrl.enabled {
+                    // 15-bit LFSR: taps at bits 14 and 13
+                    let bit = ((prbs_lfsr >> 14) ^ (prbs_lfsr >> 13)) & 1;
+                    prbs_lfsr = (prbs_lfsr << 1) | bit;
+                    let perturbation = if bit == 1 { PRBS_AMP } else { -PRBS_AMP };
+                    cmd.left = (cmd.left + perturbation).clamp(-100.0, 100.0);
+                    cmd.right = (cmd.right + perturbation).clamp(-100.0, 100.0);
+                }
+
                 let applied_left = cmd.left;
                 let applied_right = cmd.right;
 
@@ -248,8 +292,15 @@ fn main() {
                 motors.apply(cmd);
                 inner_loop_count += 1;
 
-                // 50Hz telemetry
-                if now.wrapping_sub(last_print_ms) >= 20 {
+                // Auto-revert LOG_FAST after timeout
+                if log_fast && now.wrapping_sub(log_fast_start_ms) > LOG_FAST_DURATION_MS {
+                    log_fast = false;
+                    info!("LOG_FAST timeout → 50Hz");
+                }
+
+                // Telemetry: 200Hz in LOG_FAST mode, 50Hz normally
+                let telem_interval_ms = if log_fast { 5 } else { 20 };
+                if now.wrapping_sub(last_print_ms) >= telem_interval_ms {
                     let elapsed_s = now.wrapping_sub(last_print_ms) as f32 / 1000.0;
                     let loop_hz = if elapsed_s > 0.0 {
                         inner_loop_count as f32 / elapsed_s

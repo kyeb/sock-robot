@@ -184,8 +184,20 @@ def identify_plant(run):
     N = len(run)
     dt_samples = np.diff(t)
     median_dt = np.median(dt_samples)
+    min_dt = np.min(dt_samples) if len(dt_samples) > 0 else median_dt
+    max_dt = np.max(dt_samples) if len(dt_samples) > 0 else median_dt
+    is_fast = median_dt < 0.015  # ~200 Hz if median dt < 15ms
     print(f"\n--- System Identification ---")
-    print(f"  samples: {N}, median dt: {median_dt*1000:.1f} ms")
+    print(f"  samples: {N}, median dt: {median_dt*1000:.1f} ms "
+          f"(range: {min_dt*1000:.1f}–{max_dt*1000:.1f} ms) "
+          f"{'[200 Hz]' if is_fast else '[50 Hz]'}")
+
+    # Filter out samples with irregular dt (>2x median) to avoid
+    # fitting across rate transitions or dropouts
+    good_mask = dt_samples < 2.5 * median_dt
+    n_dropped = np.sum(~good_mask)
+    if n_dropped > 0:
+        print(f"  dropping {n_dropped} irregular-dt transitions")
 
     # Build state matrix: x = [pitch, pitch_rate, wheel_vel, wheel_pos]
     X = np.column_stack([pitch, pitch_rate, vel, wp])  # (N, 4)
@@ -193,11 +205,11 @@ def identify_plant(run):
 
     # x[n+1] = A · x[n] + B · u[n]
     # Stack [x[n], u[n]] and solve for [A, B] via least-squares
-    X_now = X[:-1]   # (N-1, 4)
-    U_now = U[:-1]   # (N-1, 1)
-    X_next = X[1:]   # (N-1, 4)
+    X_now = X[:-1][good_mask]
+    U_now = U[:-1][good_mask]
+    X_next = X[1:][good_mask]
 
-    Z = np.hstack([X_now, U_now])  # (N-1, 5)
+    Z = np.hstack([X_now, U_now])
 
     # Solve X_next = Z @ [A; B]^T  →  [A; B]^T = lstsq(Z, X_next)
     AB, residuals, rank, sv = np.linalg.lstsq(Z, X_next, rcond=None)
@@ -205,9 +217,10 @@ def identify_plant(run):
     A_id = AB[:4].T   # (4, 4)
     B_id = AB[4:].T   # (4, 1)
 
-    # Model quality: one-step prediction error
-    X_pred = Z @ AB
-    errors = X_next - X_pred
+    # Recompute one-step prediction on full data for RMSE
+    Z_full = np.hstack([X[:-1], U[:-1]])
+    X_pred = Z_full @ AB
+    errors = X[1:] - X_pred
     rmse_per_state = np.sqrt(np.mean(errors**2, axis=0))
 
     print(f"\n  Identified A (discrete, dt≈{median_dt*1000:.0f}ms):")
@@ -358,6 +371,7 @@ def identify_combined(runs, run_indices):
     all_U_now = []
     all_X_next = []
     total_samples = 0
+    all_median_dts = []
 
     for idx in run_indices:
         run = runs[idx]
@@ -368,21 +382,37 @@ def identify_combined(runs, run_indices):
         vel = (v1 + v2) / 2
         wp = np.array([s["wp"] for s in run])
         effort = np.array([s.get("effort", s.get("pid", 0)) for s in run])
+        t = np.array([s["t"] for s in run], dtype=np.float64) / 1000.0
 
         X = np.column_stack([pitch, pitch_rate, vel, wp])
         U = effort.reshape(-1, 1)
 
-        all_X_now.append(X[:-1])
-        all_U_now.append(U[:-1])
-        all_X_next.append(X[1:])
+        dt_samples = np.diff(t)
+        median_dt = np.median(dt_samples)
+        all_median_dts.append(median_dt)
+
+        # Filter irregular transitions
+        good_mask = dt_samples < 2.5 * median_dt
+        all_X_now.append(X[:-1][good_mask])
+        all_U_now.append(U[:-1][good_mask])
+        all_X_next.append(X[1:][good_mask])
         total_samples += len(run)
         dur = (run[-1]["t"] - run[0]["t"]) / 1000
-        print(f"  Run {idx}: {len(run)} samples, {dur:.1f}s")
+        print(f"  Run {idx}: {len(run)} samples, {dur:.1f}s, dt≈{median_dt*1000:.0f}ms")
 
     X_now = np.vstack(all_X_now)
     U_now = np.vstack(all_U_now)
     X_next = np.vstack(all_X_next)
     N_pairs = X_now.shape[0]
+
+    overall_median_dt = np.median(all_median_dts)
+    # Check if runs have mixed rates — warn user
+    if len(all_median_dts) > 1:
+        dt_spread = max(all_median_dts) / min(all_median_dts)
+        if dt_spread > 1.5:
+            print(f"  ⚠ WARNING: mixed sample rates across runs "
+                  f"({min(all_median_dts)*1000:.0f}ms – {max(all_median_dts)*1000:.0f}ms)")
+            print(f"    Combine only runs with the same rate for best results!")
 
     print(f"  Total: {total_samples} samples, {N_pairs} transition pairs")
 
@@ -396,7 +426,7 @@ def identify_combined(runs, run_indices):
     errors = X_next - X_pred
     rmse_per_state = np.sqrt(np.mean(errors**2, axis=0))
 
-    print(f"\n  Identified A (discrete, dt≈20ms):")
+    print(f"\n  Identified A (discrete, dt≈{overall_median_dt*1000:.0f}ms):")
     state_names = ["pitch", "prate", "wvel ", "wpos "]
     print(f"         {'pitch':>8} {'prate':>8} {'wvel':>8} {'wpos':>8}")
     for i, name in enumerate(state_names):
@@ -445,11 +475,12 @@ def identify_combined(runs, run_indices):
             if np.any(np.abs(X[i] - X_sim[i]) > 3 * state_std):
                 diverge_step = i
                 break
-        diverge_time = diverge_step * 0.02
+        run_dt = np.median(np.diff(np.array([s["t"] for s in run], dtype=np.float64) / 1000.0))
+        diverge_time = diverge_step * run_dt
         dur = (run[-1]["t"] - run[0]["t"]) / 1000
         print(f"    Run {idx}: tracks {diverge_time:.2f}s / {dur:.1f}s")
 
-    return A_id, B_id
+    return A_id, B_id, overall_median_dt
 
 
 def main():
@@ -468,6 +499,8 @@ def main():
                     help="Q weight on wheel position (rad²)")
     ap.add_argument("--r", type=float, default=0.01,
                     help="R weight on effort (%%²)")
+    ap.add_argument("--trim-start", type=float, default=0.0,
+                    help="seconds to trim from start of each run")
     args = ap.parse_args()
 
     if args.file:
@@ -482,6 +515,13 @@ def main():
 
     print(f"file: {path.name}  ({path.stat().st_size/1e6:.2f} MB)")
     runs = load_ctrl_runs(path)
+    if args.trim_start > 0:
+        for i in range(len(runs)):
+            t0 = runs[i][0]["t"]
+            cutoff = t0 + args.trim_start * 1000
+            runs[i] = [s for s in runs[i] if s["t"] >= cutoff]
+        runs = [r for r in runs if len(r) >= 10]
+        print(f"(trimmed {args.trim_start:.1f}s from start of each run)")
     print(f"ctrl-on runs found: {len(runs)}")
     for i, r in enumerate(runs):
         dur = (r[-1]["t"] - r[0]["t"]) / 1000
@@ -495,9 +535,9 @@ def main():
         run_indices = [int(x.strip()) for x in args.runs.split(",")]
         for idx in run_indices:
             analyze_run(runs[idx], idx)
-        A_id, B_id = identify_combined(runs, run_indices)
+        A_id, B_id, combined_dt = identify_combined(runs, run_indices)
         try:
-            analytical_model_comparison(A_id, B_id, 0.02)
+            analytical_model_comparison(A_id, B_id, combined_dt)
         except Exception as e:
             print(f"\n  (analytical comparison skipped: {e})")
         recompute_lqr(A_id, B_id, args.q_pitch, args.q_pitch_rate,
