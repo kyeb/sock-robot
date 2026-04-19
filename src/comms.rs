@@ -23,6 +23,27 @@ pub fn parse_command(line: &str) -> Option<Command> {
     if line.eq_ignore_ascii_case("PID_OFF") {
         return Some(Command::PidOff);
     }
+    // Multi-arg: EFFORT L R or EFFORT V (V applied to both)
+    let ws_parts: Vec<&str> = line.split_whitespace().collect();
+    if ws_parts.len() >= 2 && ws_parts[0].eq_ignore_ascii_case("EFFORT") {
+        let l: f32 = ws_parts[1].parse().ok()?;
+        if !l.is_finite() {
+            return None;
+        }
+        let r: f32 = if ws_parts.len() >= 3 {
+            let r: f32 = ws_parts[2].parse().ok()?;
+            if !r.is_finite() {
+                return None;
+            }
+            r
+        } else {
+            l
+        };
+        return Some(Command::SetEffort(
+            l.clamp(-100.0, 100.0),
+            r.clamp(-100.0, 100.0),
+        ));
+    }
     let parts: Vec<&str> = line.splitn(2, ' ').collect();
     if parts.len() != 2 {
         return None;
@@ -104,6 +125,7 @@ impl JsonLine {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn emit_telemetry(
     state: &RobotState,
     snap: &SensorSnapshot,
@@ -111,6 +133,8 @@ pub fn emit_telemetry(
     vel1: f32,
     vel2: f32,
     loop_hz: f32,
+    applied_left: f32,
+    applied_right: f32,
 ) {
     let accel_pitch = -((snap.imu.accel[0] as f64)
         .atan2(snap.imu.accel[2] as f64)
@@ -147,5 +171,7 @@ pub fn emit_telemetry(
         .flt("pc", ctrl.pos_correction, 3)
         .flt("yc", ctrl.yaw_correction, 2)
         .flt("lhz", loop_hz, 1)
+        .flt("al", applied_left, 1)
+        .flt("ar", applied_right, 1)
         .emit();
 }

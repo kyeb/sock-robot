@@ -146,11 +146,11 @@ export function PidTuner({ sendCommand, connected }: PidTunerProps) {
         </div>
       </div>
       <div className="flex flex-wrap gap-x-6 gap-y-1">
-        <ParamRow label="KP" value={kp} step={1.0} min={0} max={50} precision={1}
+        <ParamRow label="KP" value={kp} step={0.5} min={0} max={50} precision={1}
           disabled={!connected} onChange={(v) => updateParam('KP', v, setKp)} />
-        <ParamRow label="KD" value={kd} step={0.1} min={0} max={50} precision={2}
+        <ParamRow label="KD" value={kd} step={0.05} min={0} max={50} precision={2}
           disabled={!connected} onChange={(v) => updateParam('KD', v, setKd)} />
-        <ParamRow label="VKP" value={vkp} step={0.1} min={0} max={50} precision={2}
+        <ParamRow label="VKP" value={vkp} step={0.05} min={0} max={50} precision={2}
           disabled={!connected} onChange={(v) => updateParam('VKP', v, setVkp)} />
         <ParamRow label="VKI" value={vki} step={0.1} min={0} max={200} precision={2}
           disabled={!connected} onChange={(v) => updateParam('VKI', v, setVki)} />

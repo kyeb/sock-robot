@@ -105,6 +105,13 @@ fn main() {
     let mut last_print_ms = millis();
     let mut inner_loop_count: u32 = 0;
 
+    // Manual effort override for motor identification. Active only when PID is off.
+    // Watchdog: auto-clears 500ms after the last EFFORT command so a host crash
+    // doesn't leave motors spinning.
+    let mut manual_effort: Option<(f32, f32)> = None;
+    let mut manual_effort_ms: u32 = 0;
+    const MANUAL_EFFORT_TIMEOUT_MS: u32 = 500;
+
     loop {
         // Handle serial commands (non-blocking)
         if let Some(byte) = comms::uart_read_byte() {
@@ -116,10 +123,12 @@ fn main() {
                                 ctrl.enabled = false;
                                 ctrl.reset();
                                 reference.enabled = false;
+                                manual_effort = None;
                                 motors.stop();
                                 info!("STOP");
                             }
                             Some(Command::PidOn) => {
+                                manual_effort = None;
                                 ctrl.reset();
                                 ctrl.set_home(estimator.wheel_pos(), estimator.yaw_pos());
                                 ctrl.enabled = true;
@@ -131,8 +140,18 @@ fn main() {
                                 ctrl.enabled = false;
                                 ctrl.reset();
                                 reference.enabled = false;
+                                manual_effort = None;
                                 motors.stop();
                                 info!("PID OFF");
+                            }
+                            Some(Command::SetEffort(l, r)) => {
+                                if ctrl.enabled {
+                                    info!("EFFORT ignored: PID is on");
+                                } else {
+                                    manual_effort = Some((l, r));
+                                    manual_effort_ms = millis();
+                                    info!("EFFORT L={:.1} R={:.1}", l, r);
+                                }
                             }
                             Some(Command::SetKp(v)) => {
                                 ctrl.angle_kp = v;
@@ -222,9 +241,30 @@ fn main() {
                 };
 
                 let state = estimator.update(&snapshot);
-                let cmd = ctrl.update(&state, &reference);
 
-                // Always apply command — if controller disabled, it returns zero
+                // Manual effort watchdog
+                if manual_effort.is_some()
+                    && now.wrapping_sub(manual_effort_ms) > MANUAL_EFFORT_TIMEOUT_MS
+                {
+                    manual_effort = None;
+                    info!("EFFORT timeout → stop");
+                }
+
+                let cmd = if !ctrl.enabled {
+                    if let Some((l, r)) = manual_effort {
+                        MotorCommand { left: l, right: r }
+                    } else {
+                        ctrl.update(&state, &reference)
+                    }
+                } else {
+                    ctrl.update(&state, &reference)
+                };
+
+                let applied_left = cmd.left;
+                let applied_right = cmd.right;
+
+                // Always apply command — if controller disabled and no manual
+                // effort, the controller returns zero
                 motors.apply(cmd);
                 inner_loop_count += 1;
 
@@ -245,6 +285,8 @@ fn main() {
                         estimator.filtered_vel1,
                         estimator.filtered_vel2,
                         loop_hz,
+                        applied_left,
+                        applied_right,
                     );
                 }
             } else {

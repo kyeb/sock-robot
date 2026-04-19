@@ -17,7 +17,10 @@ Run the dashboard frontend separately:
 
 import asyncio
 import json
+import os
+import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -45,7 +48,10 @@ async def ws_handler(websocket):
             msg = message.strip()
             if not msg:
                 continue
-            if msg == "CAPTURE_START":
+            if msg == "SHUTDOWN":
+                print("[shutdown] requested")
+                os._exit(0)
+            elif msg == "CAPTURE_START":
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                 cap_path = Path(__file__).parent.parent / "data" / f"capture_{ts}.jsonl"
                 capture_file = open(cap_path, "w")
@@ -125,10 +131,7 @@ async def serial_reader(port: str, baud: int):
         await broadcast(line)
 
 
-async def main():
-    args = sys.argv[1:]
-    port = args[0] if args else PORT
-
+async def main(port=PORT):
     server = await serve(ws_handler, "0.0.0.0", WEB_PORT)
     print(f"WebSocket server on :{WEB_PORT}")
 
@@ -149,8 +152,70 @@ async def main():
     print("\nDone.")
 
 
-if __name__ == "__main__":
+def is_running():
+    async def probe():
+        try:
+            async with websockets.connect(f"ws://localhost:{WEB_PORT}", open_timeout=0.5):
+                return True
+        except Exception:
+            return False
+    return asyncio.run(probe())
+
+
+async def send_shutdown():
     try:
-        asyncio.run(main())
+        async with websockets.connect(f"ws://localhost:{WEB_PORT}") as ws:
+            await ws.send("SHUTDOWN")
+    except Exception:
+        pass
+
+
+def stop():
+    if not is_running():
+        print("not running")
+        return
+    asyncio.run(send_shutdown())
+    for _ in range(20):
+        if not is_running():
+            print("stopped")
+            return
+        time.sleep(0.1)
+    print("warning: still running after 2s")
+
+
+def start(port=PORT):
+    if is_running():
+        print(f"already running on :{WEB_PORT}")
+        sys.exit(1)
+    try:
+        asyncio.run(main(port))
     except KeyboardInterrupt:
         pass
+
+
+if __name__ == "__main__":
+    cmd = sys.argv[1] if len(sys.argv) > 1 else None
+    if cmd == "status":
+        print("running" if is_running() else "not running")
+    elif cmd == "stop":
+        stop()
+    elif cmd == "restart":
+        stop()
+        log = Path(__file__).parent.parent / "data" / "bridge.log"
+        subprocess.Popen(
+            [__file__],
+            stdout=open(log, "a"),
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        for _ in range(30):
+            if is_running():
+                print(f"started (log: {log})")
+                break
+            time.sleep(0.1)
+        else:
+            print("warning: did not come up within 3s")
+    elif cmd:
+        start(cmd)  # treat positional arg as serial port path
+    else:
+        start()

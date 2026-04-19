@@ -222,14 +222,17 @@ def cmd_pidrun(last_seconds: float | None = None):
     tps = [s["tp"] for s in run]
     ps = [s["p"] for s in run]
     ds = [s["d"] for s in run]
+    iterms = [s.get("i", 0) for s in run]
     lhzs = [s["lhz"] for s in run]
+    sat_pct = 100 * sum(1 for e in efforts if abs(e) >= 99) / len(efforts)
     print(
         f"pitch: [{min(pitches):.2f}, {max(pitches):.2f}] std={statistics.stdev(pitches) if len(pitches)>1 else 0:.2f}"
     )
-    print(f"effort: [{min(efforts):.1f}, {max(efforts):.1f}]")
+    print(f"effort: [{min(efforts):.1f}, {max(efforts):.1f}]  saturated: {sat_pct:.1f}%")
     print(f"tp:     [{min(tps):.2f}, {max(tps):.2f}]")
     print(f"inner_p:[{min(ps):.1f}, {max(ps):.1f}]")
     print(f"inner_d:[{min(ds):.1f}, {max(ds):.1f}]")
+    print(f"outer_i:[{min(iterms):.2f}, {max(iterms):.2f}]")
     print(f"loop_hz:[{min(lhzs):.1f}, {max(lhzs):.1f}]")
     # Back out KP from telemetry: inner_p = kp * (pitch - pbias - tp); pbias=1.35 default
     kps = []
@@ -278,7 +281,8 @@ def cmd_pidrun(last_seconds: float | None = None):
     print(f"wheel_pos drift: [{min(wps):.2f}, {max(wps):.2f}]  span={max(wps)-min(wps):.2f} rad")
 
     # Per-window amplitude envelope (is the oscillation growing?)
-    win_s = 5.0
+    # Auto-scale so short runs still get multiple windows.
+    win_s = max(0.5, min(5.0, dur / 4))
     win_ms = win_s * 1000
     t0 = run[0]["t"]
     buckets: list[list[dict]] = [[]]
@@ -289,13 +293,14 @@ def cmd_pidrun(last_seconds: float | None = None):
             wstart = s["t"]
         buckets[-1].append(s)
     print(f"\nper-{win_s:.0f}s envelope (is amplitude growing?):")
-    print(f"  {'t(s)':>6}  {'wp_pkpk':>8}  {'pitch_pkpk':>10}  {'fast_std':>8}  {'wp_mean':>8}")
+    print(f"  {'t(s)':>6}  {'wp_pkpk':>8}  {'pitch_pkpk':>10}  {'fast_std':>8}  {'wp_mean':>8}  {'sat%':>5}")
     for w in buckets:
         if len(w) < 2:
             continue
         t = (w[0]["t"] - t0) / 1000
         wps_w = [s["wp"] for s in w]
         pit_w = [s["pitch"] for s in w]
+        eff_w = [s["pid"] for s in w]
         pm_w = sum(pit_w) / len(pit_w)
         # fast component: deviation from 1s moving mean
         wsize_inner = max(1, int(len(w) / max((w[-1]["t"] - w[0]["t"]) / 1000, 1e-3)))
@@ -310,9 +315,11 @@ def cmd_pidrun(last_seconds: float | None = None):
             slow_w.append(tot / len(q))
         fast_w = [pit_w[i] - slow_w[i] for i in range(len(pit_w))]
         fast_std_w = statistics.stdev(fast_w) if len(fast_w) > 1 else 0
+        sat_w = 100 * sum(1 for e in eff_w if abs(e) >= 99) / len(eff_w)
         print(
             f"  {t:>6.1f}  {max(wps_w)-min(wps_w):>8.2f}  "
-            f"{max(pit_w)-min(pit_w):>10.2f}  {fast_std_w:>8.3f}  {sum(wps_w)/len(wps_w):>8.2f}"
+            f"{max(pit_w)-min(pit_w):>10.2f}  {fast_std_w:>8.3f}  "
+            f"{sum(wps_w)/len(wps_w):>8.2f}  {sat_w:>5.1f}"
         )
 
 

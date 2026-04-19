@@ -7,7 +7,7 @@ const COUNTS_PER_REV: f32 = 3_200.0;
 // tick so filter behavior is sample-rate-independent.
 const COMP_TC_S: f32 = 0.495;
 const VEL_FILTER_TC_S: f32 = 0.045;
-const GYRO_FILTER_TC_S: f32 = 0.062;
+const GYRO_FILTER_TC_S: f32 = 0.035;
 
 fn ema_alpha(dt: f32, tc: f32) -> f32 {
     (-dt / tc).exp()

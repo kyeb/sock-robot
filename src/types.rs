@@ -50,4 +50,5 @@ pub enum Command {
     SetYawKp(f32),
     SetPitchBias(f32),
     SetVelIntLimit(f32),
+    SetEffort(f32, f32),
 }
