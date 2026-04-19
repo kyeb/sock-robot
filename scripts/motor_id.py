@@ -8,7 +8,7 @@ sequence and capture the wheel-velocity response. Analyze with analyze_motor.py.
 
 Prerequisites:
   - Robot wheels OFF the ground (so there is no load/coupling from the pendulum)
-  - PID must be OFF (script asserts this by sending PID_OFF first)
+  - Controller must be OFF (script asserts this by sending DISABLE first)
   - Bridge running at ws://localhost:8080
 
 Usage:
@@ -52,7 +52,7 @@ async def run_sequence(steps):
         except (asyncio.TimeoutError, websockets.exceptions.ConnectionClosed):
             pass
 
-        await ws.send("PID_OFF")
+        await ws.send("DISABLE")
         await asyncio.sleep(0.2)
 
         await ws.send("CAPTURE_START")

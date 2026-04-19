@@ -10,7 +10,7 @@ Do NOT use `cargo espflash flash --monitor` from Claude — the monitor needs a 
 
 ## Development notes
 
-- **No head/tail on build output.** Don't pipe build or flash commands through `head` or `tail` — it truncates useful output and kills the process early.
+- **No head/tail on build or flash output.** `tail` buffers the whole stream until EOF before emitting — if `./flash.sh` or `cargo build` hangs, `tail` shows nothing forever and the stall is invisible. Run plain. If you need to avoid dumping output into context, use `run_in_background: true` and `Read` the output file instead.
 - **Python scripts are self-contained uv scripts.** Use `#!/usr/bin/env -S uv run` with inline dependency metadata. Don't create a uv project or use pip install.
 - **Serial monitoring from Claude:** Use pyserial in Python scripts, not `espflash monitor` (needs TTY).
 - **UART:** Firmware uses raw `uart_read_bytes` from ESP-IDF sys, not the HAL `UartDriver` (which conflicts with ESP-IDF's UART0 logging).

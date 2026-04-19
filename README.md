@@ -1,6 +1,6 @@
 # sock-robot
 
-Segway-style self-balancing two-wheel robot. ESP32 + Rust firmware, React dashboard for live telemetry and PID tuning.
+Segway-style self-balancing two-wheel robot. ESP32 + Rust firmware, React dashboard for live telemetry and LQR tuning.
 
 ## Hardware
 
@@ -34,9 +34,9 @@ scripts/bridge.py          # WebSocket bridge (serial → ws://localhost:8080)
 cd dashboard && pnpm dev   # Dashboard at http://localhost:3000
 
 # Send commands / inspect live telemetry
-scripts/cmd.py PID_ON
-scripts/cmd.py VKP 0.5
-scripts/cmd.py diagnose    # full diagnostic report
+scripts/cmd.py ENABLE
+scripts/cmd.py K1 1.0
+scripts/cmd.py ctrlrun     # analyze most recent controller-on run
 ```
 
 ## Sign conventions
@@ -50,20 +50,23 @@ Mark "forward" on the robot with tape — the physical chassis is symmetrical.
 
 ## Control architecture
 
-Cascaded PID: inner P+D angle loop at 200Hz, outer PI velocity loop at ~50Hz.
+Single-law LQR over state `x = [pitch − θ_eq, pitch_rate, pos − home, vel − tvel]`:
 
-- **Inner loop:** `effort = angle_kp * (pitch - target_pitch) + angle_kd * pitch_rate`
-- **Outer loop:** velocity error → target_pitch. If drifting forward, commands backward lean to decelerate.
+```
+effort = K1·x_pitch + K2·x_pitch_rate + K3·x_pos + K4·x_vel
+```
+
+Runs at 200 Hz. Yaw is a separate decoupled P loop on encoder divergence.
 
 ## Serial commands
 
 Send over UART or via dashboard/bridge WebSocket:
 
 ```
-PID_ON / PID_OFF / STOP
-KP <val> / KD <val>           # inner angle loop
-VKP <val> / VKI <val>         # outer velocity loop
-TARGET <val>                   # target velocity (rad/s)
+ENABLE / DISABLE / STOP
+K1 / K2 / K3 / K4 <val>        # LQR state-feedback gains
+KYAW <val>                      # yaw P gain
+THEQ <val>                      # equilibrium pitch angle (deg)
+TVEL / TYAW <val>              # target velocity / yaw rate
+EFFORT <L> [R]                 # manual motor effort (controller must be off)
 ```
-
-Current gains: angle_kp=15, angle_kd=0.35, vel_kp=0.5, vel_ki=0.4.

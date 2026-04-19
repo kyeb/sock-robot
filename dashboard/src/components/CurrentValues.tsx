@@ -56,10 +56,12 @@ export function CurrentValues({ sample }: CurrentValuesProps) {
       </div>
       {/* Controller */}
       <div className="flex gap-3">
-        <ValueDisplay label="PID" value={sample?.pid} unit="%" color="#00ff88" precision={1} />
-        <ValueDisplay label="TP" value={sample?.tp} unit="°" color="#00fff5" precision={2} />
-        <ValueDisplay label="PC" value={sample?.pc} unit="" color="#bb66ff" precision={3} />
-        <ValueDisplay label="YC" value={sample?.yc} unit="" color="#ffb000" precision={2} />
+        <ValueDisplay label="U" value={sample?.effort} unit="%" color="#00ff88" precision={1} />
+        <ValueDisplay label="UP" value={sample?.up} unit="" color="#00fff5" precision={2} />
+        <ValueDisplay label="UR" value={sample?.ur} unit="" color="#00c0c0" precision={2} />
+        <ValueDisplay label="UX" value={sample?.ux} unit="" color="#bb66ff" precision={2} />
+        <ValueDisplay label="UV" value={sample?.uv} unit="" color="#ff66bb" precision={2} />
+        <ValueDisplay label="UY" value={sample?.uy} unit="" color="#ffb000" precision={2} />
       </div>
       {/* Encoders */}
       <div className="flex gap-3">

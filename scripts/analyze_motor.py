@@ -26,12 +26,12 @@ from scipy.optimize import curve_fit
 
 
 def load(path: Path):
-    """Load jsonl; return (t, eff, v1, v2, pid_on) as numpy arrays.
+    """Load jsonl; return (t, eff, v1, v2, ctrl_on) as numpy arrays.
 
-    Prefers `al`/`ar` (applied-effort telemetry) over `pid` (inner-loop
-    effort) so motor_id captures work. `pid` is 0 in manual-effort mode.
+    Prefers `al`/`ar` (applied-effort telemetry) over `effort` (controller
+    output) so motor_id captures work. `effort` is 0 in manual-effort mode.
     """
-    t, eff, v1, v2, pid_on = [], [], [], [], []
+    t, eff, v1, v2, ctrl_on = [], [], [], [], []
     with path.open() as f:
         for line in f:
             line = line.strip()
@@ -45,12 +45,12 @@ def load(path: Path):
             if "al" in d and "ar" in d:
                 eff.append((d["al"] + d["ar"]) / 2.0)
             else:
-                eff.append(d.get("pid", 0.0))
+                eff.append(d.get("effort", 0.0))
             v1.append(d["v1"])
             v2.append(d["v2"])
-            pid_on.append(1 if d.get("pid_on") else 0)
+            ctrl_on.append(1 if d.get("ctrl_on") else 0)
     return (np.array(t), np.array(eff),
-            np.array(v1), np.array(v2), np.array(pid_on))
+            np.array(v1), np.array(v2), np.array(ctrl_on))
 
 
 def find_steps(t, eff, min_step=5.0, min_dur=0.4):

@@ -5,13 +5,13 @@
 # ///
 """Send commands to the robot or view telemetry stats.
 
-Usage: scripts/cmd.py PID_ON
-       scripts/cmd.py VKP 0.5
+Usage: scripts/cmd.py ENABLE
+       scripts/cmd.py K1 1.0
        scripts/cmd.py STOP
        scripts/cmd.py stats [seconds]     # default 10s
        scripts/cmd.py watch [seconds]     # live 1Hz samples
-       scripts/cmd.py gains               # show current gains from telemetry
-       scripts/cmd.py pidrun              # analyze most recent PID-on run in log
+       scripts/cmd.py gains               # show current state from telemetry
+       scripts/cmd.py ctrlrun             # analyze most recent controller-on run
 """
 import asyncio
 import glob
@@ -40,7 +40,7 @@ def compute_stats(samples):
 
     pitches = [d["pitch"] for d in samples]
     vels = [(d["v1"] + d["v2"]) / 2 for d in samples]
-    effs = [d["pid"] for d in samples]
+    effs = [d["effort"] for d in samples]
     e1s = [d["e1"] for d in samples]
     e2s = [d["e2"] for d in samples]
 
@@ -67,7 +67,6 @@ def cmd_stats(seconds):
         print("No log files found in data/")
         return
 
-    cutoff = time.time() - seconds
     samples = []
     with open(log) as f:
         for line in f:
@@ -76,41 +75,23 @@ def cmd_stats(seconds):
                 continue
             try:
                 d = json.loads(line)
-                if not d.get("pid_on"):
+                if not d.get("ctrl_on"):
                     continue
-                # use file mod approach: read all, keep last N seconds
                 samples.append(d)
             except json.JSONDecodeError:
                 continue
 
-    # keep only samples from the last `seconds` based on timestamps
     if samples:
         t_end = samples[-1]["t"]
         t_start = t_end - seconds * 1000
         samples = [s for s in samples if s["t"] >= t_start]
 
     if not samples:
-        print(f"No PID-on samples in last {seconds}s")
+        print(f"No controller-on samples in last {seconds}s")
         return
 
     print(f"=== Stats (last {seconds}s) ===")
     compute_stats(samples)
-
-
-def find_zero_crossings(values, timestamps_ms):
-    """Find zero-crossing intervals to estimate oscillation period."""
-    crossings = []
-    for i in range(1, len(values)):
-        if values[i - 1] * values[i] < 0:
-            crossings.append(timestamps_ms[i])
-    if len(crossings) < 3:
-        return None, None
-    # period = 2x the average half-period between crossings
-    intervals = [crossings[i + 1] - crossings[i] for i in range(len(crossings) - 1)]
-    half_period_ms = sum(intervals) / len(intervals)
-    period_s = half_period_ms * 2 / 1000
-    freq_hz = 1 / period_s if period_s > 0 else 0
-    return period_s, freq_hz
 
 
 def cmd_gains():
@@ -119,7 +100,6 @@ def cmd_gains():
         print("No log files found in data/")
         return
 
-    # read last few lines to get current state
     last = None
     with open(log) as f:
         for line in f:
@@ -133,11 +113,15 @@ def cmd_gains():
         print("No valid samples found")
         return
 
-    pid = "ON" if last.get("pid_on") else "OFF"
-    print(f"  PID: {pid}")
-    print(f"  pitch={last['pitch']:+.1f}  tp={last['tp']:+.2f}")
+    ctrl = "ON" if last.get("ctrl_on") else "OFF"
+    print(f"  CTRL: {ctrl}")
+    print(f"  pitch={last['pitch']:+.1f}  wp={last.get('wp', 0):+.2f}")
     print(f"  v1={last['v1']:+.1f}  v2={last['v2']:+.1f}")
-    print(f"  effort={last['pid']:+.1f}  p={last['p']:+.1f}  i={last['i']:+.2f}  d={last['d']:+.1f}")
+    print(
+        f"  effort={last['effort']:+.1f}  up={last.get('up', 0):+.2f}  "
+        f"ur={last.get('ur', 0):+.2f}  ux={last.get('ux', 0):+.2f}  "
+        f"uv={last.get('uv', 0):+.2f}  uy={last.get('uy', 0):+.2f}"
+    )
 
 
 def cmd_watch(seconds):
@@ -149,7 +133,7 @@ def cmd_watch(seconds):
     print(f"Watching for {seconds}s...")
     end_time = time.time() + seconds
     with open(log) as f:
-        f.seek(0, 2)  # seek to end
+        f.seek(0, 2)
         last_print = 0
         while time.time() < end_time:
             line = f.readline()
@@ -161,25 +145,25 @@ def cmd_watch(seconds):
                 now = time.time()
                 if now - last_print >= 1.0:
                     last_print = now
-                    pid = "ON" if d.get("pid_on") else "OFF"
+                    ctrl = "ON" if d.get("ctrl_on") else "OFF"
                     print(
                         f"pitch={d['pitch']:+6.1f} vel={d['v1']:+5.1f}/{d['v2']:+5.1f} "
-                        f"eff={d['pid']:+6.1f} p={d['p']:+6.1f} i={d['i']:+6.2f} "
-                        f"d={d['d']:+5.1f} [{pid}]"
+                        f"eff={d['effort']:+6.1f} up={d.get('up', 0):+5.2f} "
+                        f"ur={d.get('ur', 0):+5.2f} ux={d.get('ux', 0):+5.2f} "
+                        f"uv={d.get('uv', 0):+5.2f} [{ctrl}]"
                     )
             except (json.JSONDecodeError, KeyError):
                 continue
 
 
-def cmd_pidrun(last_seconds: float | None = None):
-    """Analyze the most recent contiguous PID-on run across all logs.
+def cmd_ctrlrun(last_seconds: float | None = None):
+    """Analyze the most recent contiguous controller-on run across all logs.
 
     If last_seconds is given, only the trailing window of the run is used —
     useful for isolating the effect of a recent gain change.
     """
     import statistics
 
-    # Walk logs from newest to oldest, collect the latest contiguous on-run
     logs = sorted(glob.glob("data/*.jsonl"), key=os.path.getmtime, reverse=True)
     run = []
     for path in logs:
@@ -190,10 +174,9 @@ def cmd_pidrun(last_seconds: float | None = None):
                     d = json.loads(line)
                 except Exception:
                     continue
-                if d.get("pid_on") == 1:
+                if d.get("ctrl_on") == 1:
                     samples.append(d)
         if samples:
-            # split into runs (gap > 500ms)
             runs = []
             cur = []
             for s in samples:
@@ -207,7 +190,7 @@ def cmd_pidrun(last_seconds: float | None = None):
             print(f"log: {path}")
             break
     if not run:
-        print("no PID-on runs found")
+        print("no controller-on runs found")
         return
     if last_seconds is not None:
         cutoff = run[-1]["t"] - last_seconds * 1000
@@ -218,30 +201,26 @@ def cmd_pidrun(last_seconds: float | None = None):
     dur = (run[-1]["t"] - run[0]["t"]) / 1000
     print(f"run: t={run[0]['t']}..{run[-1]['t']} ({dur:.2f}s, {len(run)} samples)")
     pitches = [s["pitch"] for s in run]
-    efforts = [s["pid"] for s in run]
-    tps = [s["tp"] for s in run]
-    ps = [s["p"] for s in run]
-    ds = [s["d"] for s in run]
-    iterms = [s.get("i", 0) for s in run]
+    efforts = [s["effort"] for s in run]
+    ups = [s.get("up", 0) for s in run]
+    urs = [s.get("ur", 0) for s in run]
+    uxs = [s.get("ux", 0) for s in run]
+    uvs = [s.get("uv", 0) for s in run]
+    uys = [s.get("uy", 0) for s in run]
     lhzs = [s["lhz"] for s in run]
     sat_pct = 100 * sum(1 for e in efforts if abs(e) >= 99) / len(efforts)
     print(
-        f"pitch: [{min(pitches):.2f}, {max(pitches):.2f}] std={statistics.stdev(pitches) if len(pitches)>1 else 0:.2f}"
+        f"pitch: [{min(pitches):.2f}, {max(pitches):.2f}] "
+        f"std={statistics.stdev(pitches) if len(pitches)>1 else 0:.2f}"
     )
     print(f"effort: [{min(efforts):.1f}, {max(efforts):.1f}]  saturated: {sat_pct:.1f}%")
-    print(f"tp:     [{min(tps):.2f}, {max(tps):.2f}]")
-    print(f"inner_p:[{min(ps):.1f}, {max(ps):.1f}]")
-    print(f"inner_d:[{min(ds):.1f}, {max(ds):.1f}]")
-    print(f"outer_i:[{min(iterms):.2f}, {max(iterms):.2f}]")
+    print(f"up (θ):    [{min(ups):+.2f}, {max(ups):+.2f}]")
+    print(f"ur (θ̇):    [{min(urs):+.2f}, {max(urs):+.2f}]")
+    print(f"ux (pos):  [{min(uxs):+.2f}, {max(uxs):+.2f}]")
+    print(f"uv (vel):  [{min(uvs):+.2f}, {max(uvs):+.2f}]")
+    print(f"uy (yaw):  [{min(uys):+.2f}, {max(uys):+.2f}]")
     print(f"loop_hz:[{min(lhzs):.1f}, {max(lhzs):.1f}]")
-    # Back out KP from telemetry: inner_p = kp * (pitch - pbias - tp); pbias=1.35 default
-    kps = []
-    for s in run:
-        err = (s["pitch"] - 1.35) - s["tp"]
-        if abs(err) > 2 and abs(s["p"]) > 20:
-            kps.append(s["p"] / err)
-    if kps:
-        print(f"implied KP (from telemetry): {statistics.median(kps):.2f}")
+
     # Dominant frequency from zero crossings around mean
     pm = sum(pitches) / len(pitches)
     xs = 0
@@ -252,9 +231,7 @@ def cmd_pidrun(last_seconds: float | None = None):
         print(f"pitch zero-cross freq: {xs/2/dur:.2f} Hz")
 
     # Separate fast (ring) vs slow (drift) components via 1s moving-average.
-    # Fast = pitch - slow (high-frequency content). Slow = 1s moving mean.
-    # Approximates a 1Hz low-pass boundary.
-    wsize = max(1, int(len(run) / max(dur, 1e-3)))  # ~1s window in samples
+    wsize = max(1, int(len(run) / max(dur, 1e-3)))
     slow = []
     total = 0.0
     q = []
@@ -267,7 +244,6 @@ def cmd_pidrun(last_seconds: float | None = None):
     fast = [pitches[i] - slow[i] for i in range(len(pitches))]
     slow_range = max(slow) - min(slow)
     fast_std = statistics.stdev(fast) if len(fast) > 1 else 0
-    # Slow zero crossings around slow-mean
     sm = sum(slow) / len(slow)
     sxs = 0
     for i in range(1, len(slow)):
@@ -281,7 +257,6 @@ def cmd_pidrun(last_seconds: float | None = None):
     print(f"wheel_pos drift: [{min(wps):.2f}, {max(wps):.2f}]  span={max(wps)-min(wps):.2f} rad")
 
     # Per-window amplitude envelope (is the oscillation growing?)
-    # Auto-scale so short runs still get multiple windows.
     win_s = max(0.5, min(5.0, dur / 4))
     win_ms = win_s * 1000
     t0 = run[0]["t"]
@@ -300,9 +275,7 @@ def cmd_pidrun(last_seconds: float | None = None):
         t = (w[0]["t"] - t0) / 1000
         wps_w = [s["wp"] for s in w]
         pit_w = [s["pitch"] for s in w]
-        eff_w = [s["pid"] for s in w]
-        pm_w = sum(pit_w) / len(pit_w)
-        # fast component: deviation from 1s moving mean
+        eff_w = [s["effort"] for s in w]
         wsize_inner = max(1, int(len(w) / max((w[-1]["t"] - w[0]["t"]) / 1000, 1e-3)))
         slow_w = []
         tot = 0.0
@@ -344,9 +317,9 @@ def main():
         cmd_watch(seconds)
     elif cmd == "gains":
         cmd_gains()
-    elif cmd == "pidrun":
+    elif cmd == "ctrlrun":
         last = float(sys.argv[2]) if len(sys.argv) > 2 else None
-        cmd_pidrun(last)
+        cmd_ctrlrun(last)
     else:
         msg = " ".join(sys.argv[1:])
         asyncio.run(cmd_send(msg))

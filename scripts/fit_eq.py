@@ -4,7 +4,7 @@
 # dependencies = ["numpy", "scipy"]
 # ///
 """Fit pendulum natural frequency ω_n and equilibrium angle θ_eq from
-free-fall tip releases (PID off).
+free-fall tip releases (controller off).
 
 Model (linear, valid for small angles): θ̈ = ω_n²·(θ − θ_eq)
 Rewritten as regression:                 θ̈ = a + b·θ   (ω_n=√b, θ_eq=−a/b)
@@ -28,8 +28,8 @@ from scipy.signal import savgol_filter
 
 
 def load(path: Path):
-    """Return dict with t (s), pitch (deg), pid_on (bool)."""
-    t, pitch, pid_on = [], [], []
+    """Return dict with t (s), pitch (deg), ctrl_on (bool)."""
+    t, pitch, ctrl_on = [], [], []
     with path.open() as f:
         for line in f:
             line = line.strip()
@@ -41,22 +41,22 @@ def load(path: Path):
                 continue
             t.append(d["t"])
             pitch.append(d.get("pitch", 0.0))
-            pid_on.append(1 if d.get("pid_on") else 0)
+            ctrl_on.append(1 if d.get("ctrl_on") else 0)
     return {
         "t": np.array(t, dtype=np.float64) / 1000.0,
         "pitch": np.array(pitch, dtype=np.float64),
-        "pid_on": np.array(pid_on, dtype=np.int8),
+        "ctrl_on": np.array(ctrl_on, dtype=np.int8),
     }
 
 
 def find_drops(d, theta_max=10.0, min_rate=5.0):
-    """Yield (i_start, i_end) for monotonic tip windows with PID off.
+    """Yield (i_start, i_end) for monotonic tip windows with controller off.
 
-    A drop starts when |dθ/dt| exceeds `min_rate` while PID is off and
-    |θ| < theta_max; it ends when |θ| exceeds theta_max or pitch_rate
-    reverses sign.
+    A drop starts when |dθ/dt| exceeds `min_rate` while the controller is
+    off and |θ| < theta_max; it ends when |θ| exceeds theta_max or
+    pitch_rate reverses sign.
     """
-    t, pitch, pid_on = d["t"], d["pitch"], d["pid_on"].astype(bool)
+    t, pitch, ctrl_on = d["t"], d["pitch"], d["ctrl_on"].astype(bool)
     if len(t) < 20:
         return []
     try:
@@ -70,7 +70,7 @@ def find_drops(d, theta_max=10.0, min_rate=5.0):
     start = None
     sign = 0
     for i in range(len(t)):
-        if pid_on[i]:
+        if ctrl_on[i]:
             if in_drop:
                 drops.append((start, i))
                 in_drop = False

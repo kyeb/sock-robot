@@ -1,4 +1,4 @@
-use crate::controller::BalanceController;
+use crate::controller::Controller;
 use crate::types::{Command, RobotState, SensorSnapshot};
 use esp_idf_svc::sys;
 
@@ -17,11 +17,11 @@ pub fn parse_command(line: &str) -> Option<Command> {
     if line.eq_ignore_ascii_case("STOP") {
         return Some(Command::Stop);
     }
-    if line.eq_ignore_ascii_case("PID_ON") {
-        return Some(Command::PidOn);
+    if line.eq_ignore_ascii_case("ENABLE") {
+        return Some(Command::Enable);
     }
-    if line.eq_ignore_ascii_case("PID_OFF") {
-        return Some(Command::PidOff);
+    if line.eq_ignore_ascii_case("DISABLE") {
+        return Some(Command::Disable);
     }
     // Multi-arg: EFFORT L R or EFFORT V (V applied to both)
     let ws_parts: Vec<&str> = line.split_whitespace().collect();
@@ -53,19 +53,14 @@ pub fn parse_command(line: &str) -> Option<Command> {
         return None;
     }
     match parts[0].to_ascii_uppercase().as_str() {
-        "KP" => Some(Command::SetKp(val.clamp(0.0, 50.0))),
-        "KI" => Some(Command::SetKi(val.clamp(0.0, 200.0))),
-        "KD" => Some(Command::SetKd(val.clamp(0.0, 50.0))),
+        "K1" => Some(Command::SetKPitch(val.clamp(0.0, 50.0))),
+        "K2" => Some(Command::SetKPitchRate(val.clamp(0.0, 50.0))),
+        "K3" => Some(Command::SetKPos(val.clamp(0.0, 30.0))),
+        "K4" => Some(Command::SetKVel(val.clamp(0.0, 20.0))),
+        "KYAW" => Some(Command::SetKYaw(val.clamp(0.0, 10.0))),
+        "THEQ" => Some(Command::SetThetaEq(val.clamp(-5.0, 5.0))),
         "TVEL" => Some(Command::SetTargetVel(val.clamp(-5.0, 5.0))),
         "TYAW" => Some(Command::SetTargetYawRate(val.clamp(-5.0, 5.0))),
-        "VKP" => Some(Command::SetVelKp(val.clamp(0.0, 50.0))),
-        "VKI" => Some(Command::SetVelKi(val.clamp(0.0, 200.0))),
-        "VKD" => Some(Command::SetVelKd(val.clamp(0.0, 50.0))),
-        "PKP" => Some(Command::SetPosKp(val.clamp(0.0, 10.0))),
-        "PKD" => Some(Command::SetPosKd(val.clamp(0.0, 10.0))),
-        "YKP" => Some(Command::SetYawKp(val.clamp(0.0, 10.0))),
-        "PBIAS" => Some(Command::SetPitchBias(val.clamp(-5.0, 5.0))),
-        "VILIM" => Some(Command::SetVelIntLimit(val.clamp(0.1, 20.0))),
         _ => None,
     }
 }
@@ -129,7 +124,7 @@ impl JsonLine {
 pub fn emit_telemetry(
     state: &RobotState,
     snap: &SensorSnapshot,
-    ctrl: &BalanceController,
+    ctrl: &Controller,
     vel1: f32,
     vel2: f32,
     loop_hz: f32,
@@ -156,20 +151,18 @@ pub fn emit_telemetry(
         .flt("pitch", state.pitch, 1)
         .flt("ap", accel_pitch, 1)
         .flt("yr", state.yaw_rate, 1)
-        .flt("pid", ctrl.effort, 1)
-        .flt("p", ctrl.inner_p, 1)
-        .flt("i", ctrl.outer_i, 2)
-        .flt("d", ctrl.inner_d, 1)
-        .flag("pid_on", ctrl.enabled)
+        .flt("effort", ctrl.effort, 1)
+        .flt("up", ctrl.u_pitch, 2)
+        .flt("ur", ctrl.u_pitch_rate, 2)
+        .flt("ux", ctrl.u_pos, 2)
+        .flt("uv", ctrl.u_vel, 2)
+        .flt("uy", ctrl.u_yaw, 2)
+        .flag("ctrl_on", ctrl.enabled)
         .num("e1", snap.enc1)
         .num("e2", snap.enc2)
         .flt("v1", vel1, 1)
         .flt("v2", vel2, 1)
-        .flt("tp", ctrl.target_pitch, 2)
-        .flt("op", ctrl.outer_p, 2)
         .flt("wp", state.wheel_pos, 2)
-        .flt("pc", ctrl.pos_correction, 3)
-        .flt("yc", ctrl.yaw_correction, 2)
         .flt("lhz", loop_hz, 1)
         .flt("al", applied_left, 1)
         .flt("ar", applied_right, 1)

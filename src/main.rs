@@ -6,7 +6,7 @@ mod imu;
 mod motors;
 mod types;
 
-use controller::BalanceController;
+use controller::Controller;
 use encoder::Encoder;
 use esp_idf_svc::hal::gpio::PinDriver;
 use esp_idf_svc::hal::i2c::{I2cConfig, I2cDriver};
@@ -89,14 +89,14 @@ fn main() {
     estimator.init_encoders(enc1.count(), -enc2.count());
 
     // Controller
-    let mut ctrl = BalanceController::new();
+    let mut ctrl = Controller::new();
     let mut reference = ControlReference {
         target_vel: 0.0,
         target_yaw_rate: 0.0,
         enabled: false,
     };
 
-    info!("sock-robot ready. Commands: STOP, PID_ON, PID_OFF, KP/KD/VKP/VKI/PKP/YKP/TARGET <val>");
+    info!("sock-robot ready. Commands: STOP, ENABLE, DISABLE, K1/K2/K3/K4/KYAW/THEQ/TVEL/TYAW/EFFORT <val>");
 
     let mut buf = [0u8; 128];
     let mut pos = 0usize;
@@ -105,9 +105,9 @@ fn main() {
     let mut last_print_ms = millis();
     let mut inner_loop_count: u32 = 0;
 
-    // Manual effort override for motor identification. Active only when PID is off.
-    // Watchdog: auto-clears 500ms after the last EFFORT command so a host crash
-    // doesn't leave motors spinning.
+    // Manual effort override for motor identification. Active only when the
+    // controller is off. Watchdog: auto-clears 500ms after the last EFFORT
+    // command so a host crash doesn't leave motors spinning.
     let mut manual_effort: Option<(f32, f32)> = None;
     let mut manual_effort_ms: u32 = 0;
     const MANUAL_EFFORT_TIMEOUT_MS: u32 = 500;
@@ -127,42 +127,55 @@ fn main() {
                                 motors.stop();
                                 info!("STOP");
                             }
-                            Some(Command::PidOn) => {
+                            Some(Command::Enable) => {
                                 manual_effort = None;
                                 ctrl.reset();
                                 ctrl.set_home(estimator.wheel_pos(), estimator.yaw_pos());
                                 ctrl.enabled = true;
                                 reference.enabled = true;
-                                info!("PID ON: angle_kp={:.2} angle_kd={:.2} vel_kp={:.2} vel_ki={:.2} pos_kp={:.2} yaw_kp={:.2}",
-                                    ctrl.angle_kp, ctrl.angle_kd, ctrl.vel_kp, ctrl.vel_ki, ctrl.pos_kp, ctrl.yaw_kp);
+                                info!("CTRL ON: k1={:.2} k2={:.2} k3={:.2} k4={:.2} kyaw={:.2} theq={:.2}",
+                                    ctrl.k_pitch, ctrl.k_pitch_rate, ctrl.k_pos, ctrl.k_vel, ctrl.k_yaw, ctrl.theta_eq);
                             }
-                            Some(Command::PidOff) => {
+                            Some(Command::Disable) => {
                                 ctrl.enabled = false;
                                 ctrl.reset();
                                 reference.enabled = false;
                                 manual_effort = None;
                                 motors.stop();
-                                info!("PID OFF");
+                                info!("CTRL OFF");
                             }
                             Some(Command::SetEffort(l, r)) => {
                                 if ctrl.enabled {
-                                    info!("EFFORT ignored: PID is on");
+                                    info!("EFFORT ignored: controller is on");
                                 } else {
                                     manual_effort = Some((l, r));
                                     manual_effort_ms = millis();
                                     info!("EFFORT L={:.1} R={:.1}", l, r);
                                 }
                             }
-                            Some(Command::SetKp(v)) => {
-                                ctrl.angle_kp = v;
-                                info!("KP={:.2}", v);
+                            Some(Command::SetKPitch(v)) => {
+                                ctrl.k_pitch = v;
+                                info!("K1={:.2}", v);
                             }
-                            Some(Command::SetKi(v)) => {
-                                info!("KI ignored in cascaded mode (use VKI). val={:.2}", v);
+                            Some(Command::SetKPitchRate(v)) => {
+                                ctrl.k_pitch_rate = v;
+                                info!("K2={:.2}", v);
                             }
-                            Some(Command::SetKd(v)) => {
-                                ctrl.angle_kd = v;
-                                info!("KD={:.2}", v);
+                            Some(Command::SetKPos(v)) => {
+                                ctrl.k_pos = v;
+                                info!("K3={:.2}", v);
+                            }
+                            Some(Command::SetKVel(v)) => {
+                                ctrl.k_vel = v;
+                                info!("K4={:.2}", v);
+                            }
+                            Some(Command::SetKYaw(v)) => {
+                                ctrl.k_yaw = v;
+                                info!("KYAW={:.2}", v);
+                            }
+                            Some(Command::SetThetaEq(v)) => {
+                                ctrl.theta_eq = v;
+                                info!("THEQ={:.2}", v);
                             }
                             Some(Command::SetTargetVel(v)) => {
                                 reference.target_vel = v;
@@ -171,39 +184,6 @@ fn main() {
                             Some(Command::SetTargetYawRate(v)) => {
                                 reference.target_yaw_rate = v;
                                 info!("TYAW={:.2}", v);
-                            }
-                            Some(Command::SetVelKp(v)) => {
-                                ctrl.vel_kp = v;
-                                info!("VKP={:.2}", v);
-                            }
-                            Some(Command::SetVelKi(v)) => {
-                                ctrl.vel_ki = v;
-                                ctrl.reset();
-                                info!("VKI={:.2}", v);
-                            }
-                            Some(Command::SetVelKd(v)) => {
-                                ctrl.vel_kd = v;
-                                info!("VKD={:.2}", v);
-                            }
-                            Some(Command::SetPosKp(v)) => {
-                                ctrl.pos_kp = v;
-                                info!("PKP={:.2}", v);
-                            }
-                            Some(Command::SetPosKd(v)) => {
-                                ctrl.pos_kd = v;
-                                info!("PKD={:.2}", v);
-                            }
-                            Some(Command::SetYawKp(v)) => {
-                                ctrl.yaw_kp = v;
-                                info!("YKP={:.2}", v);
-                            }
-                            Some(Command::SetPitchBias(v)) => {
-                                ctrl.pitch_bias = v;
-                                info!("PBIAS={:.2}", v);
-                            }
-                            Some(Command::SetVelIntLimit(v)) => {
-                                ctrl.vel_integral_limit = v;
-                                info!("VILIM={:.2}", v);
                             }
                             None => {
                                 info!("ERR: unknown: {line}");

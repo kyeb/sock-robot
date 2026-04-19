@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react'
 import { useIMUSocket } from '~/hooks/useIMUSocket'
 import { Chart } from '~/components/Chart'
 import { CurrentValues } from '~/components/CurrentValues'
-import { PidTuner } from '~/components/PidTuner'
+import { Tuner } from '~/components/Tuner'
 import { TabBar } from '~/components/TabBar'
 import { StatusBar } from '~/components/StatusBar'
 import { TimeWindowSelector } from '~/components/TimeWindowSelector'
@@ -45,8 +45,8 @@ export function App() {
       {/* Current values - always visible */}
       <CurrentValues sample={latest} />
 
-      {/* PID tuning controls */}
-      <PidTuner sendCommand={sendCommand} connected={status === 'connected'} />
+      {/* Controller tuning */}
+      <Tuner sendCommand={sendCommand} connected={status === 'connected'} />
 
       {/* Tab bar */}
       <TabBar active={tab} onChange={setTab} />

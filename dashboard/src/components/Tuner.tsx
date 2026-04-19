@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from 'react'
 
-interface PidTunerProps {
+interface TunerProps {
   sendCommand: (cmd: string) => void
   connected: boolean
 }
@@ -41,22 +41,16 @@ function ParamRow({ label, value, step, min, max, precision, onChange, disabled 
   )
 }
 
-export function PidTuner({ sendCommand, connected }: PidTunerProps) {
-  // Inner loop (angle)
-  const [kp, setKp] = useState(10.0)
-  const [kd, setKd] = useState(0.4)
-  // Outer loop (velocity)
-  const [vkp, setVkp] = useState(0.05)
-  const [vki, setVki] = useState(0.0)
-  const [vkd, setVkd] = useState(0.0)
-  const [vilim, setVilim] = useState(4.0)
-  // Position hold
-  const [pkp, setPkp] = useState(0.3)
-  const [pkd, setPkd] = useState(0.2)
-  // Yaw correction
-  const [ykp, setYkp] = useState(0.5)
-  // Bias / target
-  const [pbias, setPbias] = useState(1.35)
+export function Tuner({ sendCommand, connected }: TunerProps) {
+  // LQR gains (~half of computed; scale all four together as a single
+  // aggressiveness knob)
+  const [k1, setK1] = useState(9.5)
+  const [k2, setK2] = useState(0.8)
+  const [k3, setK3] = useState(0.3)
+  const [k4, setK4] = useState(8.7)
+  const [kyaw, setKyaw] = useState(0.5)
+  // Equilibrium angle (measured from fit_eq.py) / targets
+  const [theq, setTheq] = useState(1.22)
   const [tvel, setTvel] = useState(0.0)
   const [tyaw, setTyaw] = useState(0.0)
   const [enabled, setEnabled] = useState(false)
@@ -77,28 +71,24 @@ export function PidTuner({ sendCommand, connected }: PidTunerProps) {
     [sendCommand],
   )
 
-  const togglePid = useCallback(() => {
+  const toggleEnable = useCallback(() => {
     if (enabled) {
-      sendCommand('PID_OFF')
+      sendCommand('DISABLE')
       setEnabled(false)
     } else {
       // Send current gains before enabling
-      sendCommand(`KP ${kp}`)
-      sendCommand(`KD ${kd}`)
-      sendCommand(`VKP ${vkp}`)
-      sendCommand(`VKI ${vki}`)
-      sendCommand(`VKD ${vkd}`)
-      sendCommand(`VILIM ${vilim}`)
-      sendCommand(`PKP ${pkp}`)
-      sendCommand(`PKD ${pkd}`)
-      sendCommand(`YKP ${ykp}`)
-      sendCommand(`PBIAS ${pbias}`)
+      sendCommand(`K1 ${k1}`)
+      sendCommand(`K2 ${k2}`)
+      sendCommand(`K3 ${k3}`)
+      sendCommand(`K4 ${k4}`)
+      sendCommand(`KYAW ${kyaw}`)
+      sendCommand(`THEQ ${theq}`)
       sendCommand(`TVEL ${tvel}`)
       sendCommand(`TYAW ${tyaw}`)
-      sendCommand('PID_ON')
+      sendCommand('ENABLE')
       setEnabled(true)
     }
-  }, [enabled, kp, kd, vkp, vki, vkd, vilim, pkp, pkd, ykp, pbias, tvel, tyaw, sendCommand])
+  }, [enabled, k1, k2, k3, k4, kyaw, theq, tvel, tyaw, sendCommand])
 
   const toggleCapture = useCallback(() => {
     if (capturing) {
@@ -114,7 +104,7 @@ export function PidTuner({ sendCommand, connected }: PidTunerProps) {
     <div className="border border-[#181818] p-3 flex flex-col gap-2">
       <div className="flex items-center justify-between">
         <span className="text-[10px] tracking-[0.3em] uppercase text-[#444]">
-          pid controller
+          lqr controller
         </span>
         <div className="flex gap-2">
         <button
@@ -139,33 +129,25 @@ export function PidTuner({ sendCommand, connected }: PidTunerProps) {
                 : 'bg-[#1a1a24] border-[#333] text-[#666] hover:text-[#c0c0c0] hover:border-[#555]'
           }`}
           disabled={!connected}
-          onClick={togglePid}
+          onClick={toggleEnable}
         >
           {enabled ? 'ON' : 'OFF'}
         </button>
         </div>
       </div>
       <div className="flex flex-wrap gap-x-6 gap-y-1">
-        <ParamRow label="KP" value={kp} step={0.5} min={0} max={50} precision={1}
-          disabled={!connected} onChange={(v) => updateParam('KP', v, setKp)} />
-        <ParamRow label="KD" value={kd} step={0.05} min={0} max={50} precision={2}
-          disabled={!connected} onChange={(v) => updateParam('KD', v, setKd)} />
-        <ParamRow label="VKP" value={vkp} step={0.05} min={0} max={50} precision={2}
-          disabled={!connected} onChange={(v) => updateParam('VKP', v, setVkp)} />
-        <ParamRow label="VKI" value={vki} step={0.1} min={0} max={200} precision={2}
-          disabled={!connected} onChange={(v) => updateParam('VKI', v, setVki)} />
-        <ParamRow label="VKD" value={vkd} step={0.02} min={0} max={50} precision={2}
-          disabled={!connected} onChange={(v) => updateParam('VKD', v, setVkd)} />
-        <ParamRow label="VILIM" value={vilim} step={1.0} min={0.1} max={20} precision={1}
-          disabled={!connected} onChange={(v) => updateParam('VILIM', v, setVilim)} />
-        <ParamRow label="PKP" value={pkp} step={0.1} min={0} max={10} precision={2}
-          disabled={!connected} onChange={(v) => updateParam('PKP', v, setPkp)} />
-        <ParamRow label="PKD" value={pkd} step={0.02} min={0} max={10} precision={2}
-          disabled={!connected} onChange={(v) => updateParam('PKD', v, setPkd)} />
-        <ParamRow label="YKP" value={ykp} step={0.2} min={0} max={10} precision={2}
-          disabled={!connected} onChange={(v) => updateParam('YKP', v, setYkp)} />
-        <ParamRow label="PBIAS" value={pbias} step={0.01} min={-5} max={5} precision={2}
-          disabled={!connected} onChange={(v) => updateParam('PBIAS', v, setPbias)} />
+        <ParamRow label="K1" value={k1} step={0.1} min={0} max={50} precision={2}
+          disabled={!connected} onChange={(v) => updateParam('K1', v, setK1)} />
+        <ParamRow label="K2" value={k2} step={0.02} min={0} max={50} precision={2}
+          disabled={!connected} onChange={(v) => updateParam('K2', v, setK2)} />
+        <ParamRow label="K3" value={k3} step={0.2} min={0} max={30} precision={2}
+          disabled={!connected} onChange={(v) => updateParam('K3', v, setK3)} />
+        <ParamRow label="K4" value={k4} step={0.1} min={0} max={20} precision={2}
+          disabled={!connected} onChange={(v) => updateParam('K4', v, setK4)} />
+        <ParamRow label="KYAW" value={kyaw} step={0.2} min={0} max={10} precision={2}
+          disabled={!connected} onChange={(v) => updateParam('KYAW', v, setKyaw)} />
+        <ParamRow label="THEQ" value={theq} step={0.01} min={-5} max={5} precision={2}
+          disabled={!connected} onChange={(v) => updateParam('THEQ', v, setTheq)} />
         <ParamRow label="TVEL" value={tvel} step={0.5} min={-5} max={5} precision={2}
           disabled={!connected} onChange={(v) => updateParam('TVEL', v, setTvel)} />
         <ParamRow label="TYAW" value={tyaw} step={0.5} min={-5} max={5} precision={2}

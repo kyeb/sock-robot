@@ -16,7 +16,8 @@ function appendToBuffer(buf: number[][], sample: IMUSample) {
     sample.gx, sample.gy, sample.gz,
     sample.roll, sample.pitch, sample.ap ?? 0, sample.yr ?? 0,
     sample.v1 ?? 0, sample.v2 ?? 0,
-    sample.pid ?? 0, sample.tp ?? 0, sample.pc ?? 0, sample.yc ?? 0,
+    sample.effort ?? 0, sample.up ?? 0, sample.ur ?? 0,
+    sample.ux ?? 0, sample.uv ?? 0, sample.uy ?? 0,
   ]
   for (let i = 0; i < NUM_COLUMNS; i++) {
     buf[i].push(values[i])
