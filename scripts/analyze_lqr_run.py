@@ -89,8 +89,10 @@ def analyze_run(run, run_idx):
     print(f"  saturated: {sat_pct:.1f}% of samples")
 
     print(f"\n--- Per-term contributions (effort %) ---")
+    ui = np.array([s.get("ui", 0) for s in run])
     for name, arr in [("u_pitch", up), ("u_pitch_rate", ur),
-                       ("u_pos", ux), ("u_vel", uv), ("u_yaw", uy)]:
+                       ("u_pos", ux), ("u_vel", uv), ("u_pos_int", ui),
+                       ("u_yaw", uy)]:
         print(f"  {name:14s}: mean={np.mean(arr):+6.2f}  std={np.std(arr):5.2f}  "
               f"range=[{np.min(arr):+.1f}, {np.max(arr):+.1f}]")
 
