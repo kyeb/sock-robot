@@ -5,9 +5,9 @@ interface DriveProps {
   connected: boolean
 }
 
-const MAX_TVEL = 0.5
-const MAX_TYAW = 0.5
-const RAMP_SECONDS = 0.3
+const MAX_TVEL = 1.5
+const MAX_TYAW = 1.5
+const RAMP_SECONDS = 0.8
 const SEND_HZ = 20
 const DEADBAND = 0.01
 
@@ -105,9 +105,11 @@ export function Drive({ sendCommand, connected }: DriveProps) {
     return 'w-14 h-14 border flex items-center justify-center text-xl bg-[#1a1a24] border-[#333] text-[#555] transition-colors'
   }
 
-  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (focused) e.currentTarget.blur()
-    else e.currentTarget.focus()
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (document.activeElement === e.currentTarget) {
+      e.preventDefault()
+      e.currentTarget.blur()
+    }
   }
 
   return (
@@ -117,7 +119,7 @@ export function Drive({ sendCommand, connected }: DriveProps) {
       onBlur={handleBlur}
       onKeyDown={handleKeyDown}
       onKeyUp={handleKeyUp}
-      onClick={handleClick}
+      onMouseDown={handleMouseDown}
       className={`flex-1 min-h-0 flex flex-col items-center justify-center gap-8 outline-none cursor-pointer select-none transition-all ${
         !connected
           ? 'border-2 border-[#333] opacity-40'

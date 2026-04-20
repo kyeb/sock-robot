@@ -150,6 +150,184 @@ def analyze_run(run, run_idx):
               f"{np.mean(wpos):>+8.2f}  {sat:>5.1f}  "
               f"{max(wp_w)-min(wp_w):>8.2f}°")
 
+    spectral_analysis(run)
+    sensitivity_analysis(run)
+
+
+def sensitivity_analysis(run):
+    """Compute empirical closed-loop sensitivity from chirp/PRBS data.
+
+    Sensitivity S(jω) = 1 / (1 + L(jω)) where L is the open-loop TF.
+    The peak |S|_∞ (M_s) tells us robustness margin:
+      M_s < 2.0 → safe, good margins
+      M_s 2-3   → works but brittle
+      M_s > 3   → near instability
+
+    We estimate S empirically from the relationship between the chirp
+    excitation signal (uc) and pitch response.
+    """
+    from scipy.signal import welch, csd, coherence
+
+    t = np.array([s["t"] for s in run], dtype=np.float64) / 1000.0
+    dt = np.median(np.diff(t))
+    fs = 1.0 / dt
+    N = len(run)
+
+    chirp = np.array([s.get("uc", 0) for s in run])
+    if np.std(chirp) < 0.5:
+        return  # no excitation signal
+
+    pitch = np.array([s["pitch"] for s in run])
+    pitch_rate = np.array([s["gy"] for s in run]) * (180.0 / np.pi)
+    effort = np.array([s.get("effort", s.get("pid", 0)) for s in run])
+
+    nperseg = min(256, N // 2)
+
+    print(f"\n--- Sensitivity / Margin Analysis ---")
+
+    # G_plant: u_total → pitch_rate (the plant as seen by the controller)
+    f, Gpe = csd(effort, pitch_rate, fs=fs, nperseg=nperseg)
+    _, Pee = welch(effort, fs=fs, nperseg=nperseg)
+    G_plant = Gpe / (Pee + 1e-12)
+
+    # Coherence for reliability
+    _, coh_pe = coherence(effort, pitch_rate, fs=fs, nperseg=nperseg)
+
+    # Sensitivity from chirp: S(jω) ≈ pitch_response_to_chirp / open_loop_chirp_effect
+    # More directly: the complementary sensitivity T = 1 - S can be estimated
+    # from how much of the chirp shows up in pitch vs how much the controller rejects.
+    # Simplest empirical approach: S ≈ Φ_pitch_chirp / Φ_chirp_chirp normalized by G
+    # But cleaner: compute the closed-loop TF from chirp→pitch and chirp→effort
+    _, Pcc = welch(chirp, fs=fs, nperseg=nperseg)
+    _, Gcp = csd(chirp, pitch_rate, fs=fs, nperseg=nperseg)
+    _, Gce = csd(chirp, effort, fs=fs, nperseg=nperseg)
+    _, coh_cp = coherence(chirp, pitch_rate, fs=fs, nperseg=nperseg)
+
+    # T(jω) = closed-loop from chirp → pitch_rate = Gcp / Pcc
+    # S(jω) = 1 - T(jω) ... but this only works if chirp enters at the plant input
+    # Since chirp IS added to effort: chirp → effort_total → plant → pitch_rate
+    # The closed-loop TF from chirp to pitch_rate is G/(1+L) = T·G_plant
+    # And from chirp to effort is 1/(1+L) = S
+    # So S(jω) ≈ Gce / Pcc (transfer from chirp to total effort)
+
+    S_emp = Gce / (Pcc + 1e-12)
+    S_mag = np.abs(S_emp)
+
+    # Report sensitivity at key frequencies
+    print(f"  freq(Hz)  |S|    coh(u,pr)  coh(chirp,pr)  interpretation")
+    for freq_target in [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 6.25, 7.0, 8.0, 10.0]:
+        idx = np.argmin(np.abs(f - freq_target))
+        if f[idx] > fs/2:
+            continue
+        s_val = S_mag[idx]
+        c_pe = coh_pe[idx] if idx < len(coh_pe) else 0
+        c_cp = coh_cp[idx] if idx < len(coh_cp) else 0
+        marker = ""
+        if s_val > 3:
+            marker = "  ← DANGER"
+        elif s_val > 2:
+            marker = "  ← brittle"
+        elif s_val > 1.5:
+            marker = "  ← tight"
+        print(f"  {f[idx]:>6.1f}    {s_val:>5.2f}  {c_pe:>10.2f}  {c_cp:>13.2f}{marker}")
+
+    # Peak sensitivity
+    valid = (f > 0.3) & (f < fs/2)
+    ms_peak = np.max(S_mag[valid])
+    ms_freq = f[valid][np.argmax(S_mag[valid])]
+    print(f"\n  Peak sensitivity M_s = {ms_peak:.2f} at {ms_freq:.1f} Hz")
+    if ms_peak < 2.0:
+        print(f"  → Good margins. Room to increase gains.")
+    elif ms_peak < 3.0:
+        print(f"  → Tight margins. Near stability limit at {ms_freq:.1f} Hz.")
+    else:
+        print(f"  → Poor margins. System is brittle at {ms_freq:.1f} Hz.")
+
+
+def spectral_analysis(run):
+    """Per-term spectral analysis: which control term dominates at each frequency."""
+    from scipy.signal import welch
+
+    t = np.array([s["t"] for s in run], dtype=np.float64) / 1000.0
+    dt = np.median(np.diff(t))
+    fs = 1.0 / dt
+    N = len(run)
+
+    if N < 64:
+        print(f"\n--- Spectral Analysis ---")
+        print(f"  (too few samples for spectral analysis)")
+        return
+
+    nperseg = min(128, N // 2)
+
+    signals = {
+        "pitch":  np.array([s["pitch"] for s in run]),
+        "effort": np.array([s.get("effort", s.get("pid", 0)) for s in run]),
+        "u_pitch": np.array([s.get("up", 0) for s in run]),
+        "u_prate": np.array([s.get("ur", 0) for s in run]),
+        "u_pos":   np.array([s.get("ux", 0) for s in run]),
+        "u_vel":   np.array([s.get("uv", 0) for s in run]),
+        "u_pint":  np.array([s.get("ui", 0) for s in run]),
+    }
+
+    # Detrend (remove mean) before FFT
+    for k in signals:
+        signals[k] = signals[k] - np.mean(signals[k])
+
+    print(f"\n--- Spectral Analysis (nperseg={nperseg}, fs={fs:.0f} Hz) ---")
+
+    # Compute PSD for each signal
+    psds = {}
+    for name, sig in signals.items():
+        f, psd = welch(sig, fs=fs, nperseg=nperseg)
+        psds[name] = (f, psd)
+
+    # Find dominant frequency of pitch oscillation
+    f_pitch, psd_pitch = psds["pitch"]
+    mask = f_pitch > 0.3  # ignore DC
+    peak_idx = np.argmax(psd_pitch[mask]) + np.argmax(mask)
+    peak_freq = f_pitch[peak_idx]
+    print(f"  Pitch peak frequency: {peak_freq:.2f} Hz")
+
+    # Show which control terms have the most power at the pitch peak frequency
+    print(f"\n  Power at pitch peak ({peak_freq:.1f} Hz) and nearby:")
+    freq_band = (f_pitch > peak_freq * 0.7) & (f_pitch < peak_freq * 1.4)
+    term_names = ["u_pitch", "u_prate", "u_pos", "u_vel", "u_pint"]
+    band_powers = {}
+    for name in term_names:
+        f, psd = psds[name]
+        bp = np.mean(psd[freq_band]) if np.any(freq_band) else 0
+        band_powers[name] = bp
+
+    total_bp = sum(band_powers.values())
+    if total_bp > 0:
+        for name in sorted(band_powers, key=lambda n: -band_powers[n]):
+            bp = band_powers[name]
+            pct = 100 * bp / total_bp
+            bar = "#" * int(pct / 2)
+            print(f"    {name:10s}: {pct:5.1f}%  {bar}")
+
+    # Also show power distribution across full spectrum for each term
+    print(f"\n  Total RMS by term (all frequencies):")
+    for name in term_names:
+        f, psd = psds[name]
+        rms = np.sqrt(np.trapezoid(psd[1:], f[1:]))
+        print(f"    {name:10s}: {rms:6.2f} effort%")
+
+    # Cross-coherence: which term leads pitch oscillation?
+    from scipy.signal import csd, coherence
+    print(f"\n  Coherence with pitch at peak ({peak_freq:.1f} Hz):")
+    for name in term_names:
+        sig = signals[name]
+        f_coh, coh = coherence(signals["pitch"], sig, fs=fs, nperseg=nperseg)
+        # Find coherence nearest to peak freq
+        idx = np.argmin(np.abs(f_coh - peak_freq))
+        f_csd, Pxy = csd(signals["pitch"], sig, fs=fs, nperseg=nperseg)
+        phase = np.angle(Pxy[idx], deg=True)
+        print(f"    {name:10s}: coh={coh[idx]:.2f}  phase={phase:+.0f}°"
+              f"{'  ← LEADS pitch' if -180 < phase < -10 else ''}"
+              f"{'  ← LAGS pitch' if 10 < phase < 180 else ''}")
+
 
 def identify_plant(run):
     """Fit discrete-time A, B from telemetry via least-squares.

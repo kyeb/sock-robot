@@ -143,6 +143,7 @@ pub fn emit_telemetry(
     loop_hz: f32,
     applied_left: f32,
     applied_right: f32,
+    chirp: f32,
 ) {
     let accel_pitch = -((snap.imu.accel[0] as f64)
         .atan2(snap.imu.accel[2] as f64)
@@ -180,5 +181,6 @@ pub fn emit_telemetry(
         .flt("lhz", loop_hz, 1)
         .flt("al", applied_left, 1)
         .flt("ar", applied_right, 1)
+        .flt("uc", chirp, 1)
         .emit();
 }

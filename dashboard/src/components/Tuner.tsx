@@ -46,9 +46,9 @@ export function Tuner({ sendCommand, connected }: TunerProps) {
   // aggressiveness knob)
   const [k1, setK1] = useState(9.5)
   const [k2, setK2] = useState(0.8)
-  const [k3, setK3] = useState(0.3)
+  const [k3, setK3] = useState(2.0)
   const [k4, setK4] = useState(8.7)
-  const [k5, setK5] = useState(0.5)
+  const [k5, setK5] = useState(5.0)
   const [kyaw, setKyaw] = useState(0.5)
   // Equilibrium angle (measured from fit_eq.py) / targets
   const [theq, setTheq] = useState(1.22)

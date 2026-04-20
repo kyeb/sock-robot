@@ -118,11 +118,19 @@ fn main() {
     let mut log_fast_start_ms: u32 = 0;
     const LOG_FAST_DURATION_MS: u32 = 10_000;
 
-    // PRBS: inject small pseudo-random effort for sysid excitation.
-    // Uses a 15-bit LFSR (maximal length 32767) toggling ±PRBS_AMP every tick.
+    // Sysid excitation: logarithmic chirp 0.3 → 8 Hz over 45s, ±12% effort.
+    // Frequency diversity decorrelates wvel/prate channels that a fixed-freq
+    // PRBS leaves collinear. Log sweep spends more time at low freqs where
+    // slow modes (position, integrator) live.
     let mut prbs_on = false;
-    let mut prbs_lfsr: u16 = 0xACE1;
-    const PRBS_AMP: f32 = 8.0;
+    let mut chirp_phase: f32 = 0.0;
+    let mut chirp_t: f32 = 0.0;
+    #[allow(unused_assignments)]
+    let mut chirp_output: f32 = 0.0;
+    const CHIRP_AMP: f32 = 12.0;
+    const CHIRP_F0: f32 = 0.3;
+    const CHIRP_F1: f32 = 8.0;
+    const CHIRP_DUR: f32 = 45.0;
 
     loop {
         // Handle serial commands (non-blocking)
@@ -212,7 +220,12 @@ fn main() {
                             }
                             Some(Command::PrbsOn) => {
                                 prbs_on = true;
-                                info!("PRBS on (±{:.0}%)", PRBS_AMP);
+                                chirp_phase = 0.0;
+                                chirp_t = 0.0;
+                                info!(
+                                    "CHIRP on (±{:.0}%, {:.1}-{:.0} Hz, {:.0}s)",
+                                    CHIRP_AMP, CHIRP_F0, CHIRP_F1, CHIRP_DUR
+                                );
                             }
                             Some(Command::PrbsOff) => {
                                 prbs_on = false;
@@ -276,12 +289,24 @@ fn main() {
                 // PRBS excitation: inject ±PRBS_AMP to both wheels (same sign
                 // so it doesn't induce yaw, only forward/back perturbation).
                 if prbs_on && ctrl.enabled {
-                    // 15-bit LFSR: taps at bits 14 and 13
-                    let bit = ((prbs_lfsr >> 14) ^ (prbs_lfsr >> 13)) & 1;
-                    prbs_lfsr = (prbs_lfsr << 1) | bit;
-                    let perturbation = if bit == 1 { PRBS_AMP } else { -PRBS_AMP };
-                    cmd.left = (cmd.left + perturbation).clamp(-100.0, 100.0);
-                    cmd.right = (cmd.right + perturbation).clamp(-100.0, 100.0);
+                    // Log chirp: f(t) = f0 * (f1/f0)^(t/T)
+                    // Phase accumulates: phase += 2π * f(t) * dt
+                    if chirp_t < CHIRP_DUR {
+                        let ratio = chirp_t / CHIRP_DUR;
+                        let freq = CHIRP_F0 * (CHIRP_F1 / CHIRP_F0).powf(ratio);
+                        chirp_phase += core::f32::consts::TAU * freq * dt;
+                        if chirp_phase > core::f32::consts::TAU {
+                            chirp_phase -= core::f32::consts::TAU;
+                        }
+                        chirp_output = CHIRP_AMP * chirp_phase.sin();
+                        chirp_t += dt;
+                    } else {
+                        chirp_output = 0.0;
+                    }
+                    cmd.left = (cmd.left + chirp_output).clamp(-100.0, 100.0);
+                    cmd.right = (cmd.right + chirp_output).clamp(-100.0, 100.0);
+                } else {
+                    chirp_output = 0.0;
                 }
 
                 let applied_left = cmd.left;
@@ -318,6 +343,7 @@ fn main() {
                         loop_hz,
                         applied_left,
                         applied_right,
+                        chirp_output,
                     );
                 }
             } else {

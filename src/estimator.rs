@@ -5,9 +5,16 @@ const COUNTS_PER_REV: f32 = 3_200.0;
 
 // Filter time constants (seconds). alpha = exp(-dt/tau) is computed each
 // tick so filter behavior is sample-rate-independent.
+//
+// GYRO_FILTER_TC_S is the binding constraint on LQR gain aggressiveness.
+// At 35ms (original), the sensitivity peak at 6.25 Hz was |S|=3.95,
+// limiting K5 (position integrator) to ~1 before triggering pitch-rate
+// oscillation. At 20ms, the 6.25 Hz peak drops to |S|=1.69, allowing
+// K5=5 without vibration. Measured via chirp excitation + empirical
+// sensitivity analysis (analyze_lqr_run.py).
 const COMP_TC_S: f32 = 0.495;
 const VEL_FILTER_TC_S: f32 = 0.045;
-const GYRO_FILTER_TC_S: f32 = 0.035;
+const GYRO_FILTER_TC_S: f32 = 0.020;
 
 fn ema_alpha(dt: f32, tc: f32) -> f32 {
     (-dt / tc).exp()

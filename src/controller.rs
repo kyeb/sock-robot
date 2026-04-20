@@ -37,10 +37,10 @@ impl Controller {
         Self {
             k_pitch: 9.5,
             k_pitch_rate: 0.8,
-            k_pos: 0.3,
+            k_pos: 2.0,
             k_vel: 8.7,
             k_yaw: 0.5,
-            k_pos_int: 0.5,
+            k_pos_int: 5.0,
             theta_eq: 1.22,
             enabled: false,
             home_pos: 0.0,
